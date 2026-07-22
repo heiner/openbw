@@ -20,7 +20,7 @@ const MPQS = [
 // The melee map: a CC BY 4.0 map committed under web/maps/ and deployed with the
 // site (see web/maps/ATTRIBUTION.md). MAP_REMOTE is an optional fallback, used only
 // if a build ever ships without the map file.
-const MAP_LOCAL = './maps/Melancholy_v1.scx';
+const MAP_LOCAL = './maps/Weave_v1.scx';
 const MAP_REMOTE = '';
 
 const $ = (id) => document.getElementById(id);

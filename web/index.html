@@ -65,6 +65,9 @@
   #resources:empty { display: none; }
   #resources .r { display: flex; gap: 5px; align-items: center; }
   #resources .rico { height: 22px; width: auto; max-width: 26px; image-rendering: pixelated; }
+  /* the carried mineral/gas sprites are small and fill their box, so scale them down
+     to visually match the (more sparsely-filled) supply-provider sprite */
+  #resources .min .rico, #resources .gas .rico { height: 16px; }
   #resources .dot { width: 9px; height: 9px; border-radius: 50%; }
   #resources .min .dot { background: #6cb8ff; }
   #resources .gas .dot { background: #4ade80; }

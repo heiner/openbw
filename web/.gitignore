@@ -12,7 +12,7 @@ data/
 
 # downloaded test maps — keep only the committed CC BY 4.0 map + its attribution
 maps/*
-!maps/Melancholy_v1.scx
+!maps/Weave_v1.scx
 !maps/ATTRIBUTION.md
 
 # render dumps
