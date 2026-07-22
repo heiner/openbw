@@ -17,7 +17,11 @@ const MPQS = [
   { key: 'broodat',  local: './data/BROODAT.MPQ',  url: ARCHIVE_BASE + 'BROODAT.MPQ',  size: 23519727 },
   { key: 'patch_rt', local: './data/patch_rt.mpq', url: ARCHIVE_BASE + 'patch_rt.mpq', size: 636958   },
 ];
-const MAP_URL = './maps/Benzene.scx';
+// The melee map. Local dev reads the mirror under web/maps/ (gitignored); the
+// hosted site has no map committed, so it fetches MAP_REMOTE — set this to a
+// CORS-enabled URL of a .scx/.scm you host (e.g. an Internet Archive item).
+const MAP_LOCAL = './maps/Benzene.scx';
+const MAP_REMOTE = '';   // TODO: hosted map URL for openbw.heiner.ai
 
 const $ = (id) => document.getElementById(id);
 const setBar = (f) => { $('bar').firstElementChild.style.width = (f * 100).toFixed(1) + '%'; };
@@ -99,8 +103,11 @@ async function loadAssets() {
     setBar((i + 1) / (MPQS.length + 1));
   }
   setMsg('Loading map…');
-  const map = new Uint8Array(await (await fetch(MAP_URL)).arrayBuffer());
-  out.push(map);
+  let mapBuf = null;
+  try { const r = await fetch(MAP_LOCAL); if (r.ok) mapBuf = await r.arrayBuffer(); } catch {}
+  if (!mapBuf && MAP_REMOTE) mapBuf = await (await fetch(MAP_REMOTE)).arrayBuffer();
+  if (!mapBuf) throw new Error('No map available — set MAP_REMOTE to a hosted .scx URL.');
+  out.push(new Uint8Array(mapBuf));
   setBar(1);
   return out;
 }

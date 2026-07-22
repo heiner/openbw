@@ -1,0 +1,57 @@
+name: Deploy to GitHub Pages
+
+# Builds the wasm sandbox with the WASI SDK and publishes the static web/ files
+# (index.html, openbw.js, openbw.wasm, CNAME). No game data is hosted — the
+# browser fetches the MPQs client-side from the Internet Archive at runtime.
+
+on:
+  push:
+    branches: [claudeweb, main, master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# One deploy at a time; a newer push supersedes an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch WASI SDK
+        run: |
+          curl -sSL https://github.com/WebAssembly/wasi-sdk/releases/download/wasi-sdk-33/wasi-sdk-33.0-x86_64-linux.tar.gz | tar xz
+          echo "WASI_SDK=$PWD/wasi-sdk-33.0-x86_64-linux" >> "$GITHUB_ENV"
+
+      - name: Build wasm
+        run: bash web/build-wasm.sh
+
+      - name: Assemble site
+        run: |
+          mkdir -p _site
+          cp web/index.html web/openbw.js web/openbw.wasm web/CNAME _site/
+          # A committed map (if any) ships too; otherwise the map is fetched at runtime.
+          if compgen -G "web/maps/*.scx" > /dev/null; then
+            mkdir -p _site/maps && cp web/maps/*.scx _site/maps/
+          fi
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - id: deploy
+        uses: actions/deploy-pages@v4
