@@ -685,7 +685,11 @@ struct play_ui : ui_functions {
 			   : (int)my_race == 0 ? ImageTypes::IMAGEID_Zerg_Gas_Sac_Type1
 			   : ImageTypes::IMAGEID_Terran_Gas_Tank_Type1;
 		}
-		return rasterize_icon(global_st.image_grp[(size_t)id], 0, nullptr);
+		// Match the command-card unit icons: the carried delivery sprite rotates
+		// with its carrier, so use frame 12 (south-east) when it's directional.
+		const image_type_t& it = global_st.image_types.vec[(size_t)id];
+		return rasterize_icon(global_st.image_grp[(size_t)id],
+			it.has_directional_frames ? 12 : 0, nullptr);
 	}
 
 	// Placement preview: a faded, tinted silhouette of the actual building, plus a
