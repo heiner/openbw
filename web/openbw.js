@@ -420,6 +420,7 @@ async function boot(race) {
     let html = `<span class="title">${t0[0]}</span>`;
     if (t0[1]) html += `<span class="stat">${t0[1]}</span>`;
     if (t0[2]) html += `<span class="stat">${t0[2]}</span>`;
+    const ri = getResIcons();   // mineral / gas sprite icons for the cost popup
     for (let i = 1; i < lines.length; i++) {
       const f = lines[i].split('\t');   // KEY, Label, enabled(1/0), iconUnitId(-1 = none)
       if (f.length < 2) continue;
@@ -437,9 +438,12 @@ async function boot(race) {
       // Resource cost: tooltip on hover, and mark red when unaffordable.
       const minC = f.length > 4 ? +f[4] : 0, gasC = f.length > 5 ? +f[5] : 0;
       const poor = f.length > 6 && f[6] === '0' ? ' poor' : '';
-      // Immediate cost popup shown on hover (native title tooltips are too slow to notice).
+      // Immediate cost popup shown on hover (native title tooltips are too slow to notice),
+      // fronting each amount with the same delivery sprite used in the resource HUD.
+      const mIco = ri[0] ? `<img class="cico" src="${ri[0]}">` : '';
+      const gIco = ri[1] ? `<img class="cico" src="${ri[1]}">` : '';
       const cost = (minC || gasC)
-        ? `<span class="cost"><b class="m">${minC}</b>${gasC ? ` <b class="g">${gasC}</b>` : ''}</span>`
+        ? `<span class="cost"><b class="m">${mIco}${minC}</b>${gasC ? ` <b class="g">${gIco}${gasC}</b>` : ''}</span>`
         : '';
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
@@ -490,21 +494,29 @@ async function boot(race) {
     ictx.putImageData(img, 0, 0);
     return iconCanvas.toDataURL();
   };
+  // [0]=mineral chunk, [1]=gas container, [2]=supply provider. Cached once the palette
+  // is loaded; shared by the HUD and the command-card cost popup.
   let resIcons = null;
+  const getResIcons = () => {
+    if (resIcons) return resIcons;
+    const r = [resIconURL(0), resIconURL(1), resIconURL(2)];
+    if (r[0] && r[1] && r[2]) resIcons = r;
+    return r;
+  };
   const updateResources = () => {
     const ptr = x.openbw_resources();
     const text = ptr ? readCString(ptr) : '';
     if (text === lastRes) return;
     lastRes = text;
     if (!text) { resEl.innerHTML = ''; return; }
-    if (!resIcons) resIcons = [resIconURL(0), resIconURL(1), resIconURL(2)];
+    const ri = getResIcons();
     const [min, gas, used, max] = text.split('\t');
     const cap = (+used >= +max) ? ' cap' : '';
     const ico = (u, cls) => u ? `<img class="rico" src="${u}">` : `<span class="dot ${cls}"></span>`;
     resEl.innerHTML =
-      `<span class="r min">${ico(resIcons[0], 'min')}${min}</span>` +
-      `<span class="r gas">${ico(resIcons[1], 'gas')}${gas}</span>` +
-      `<span class="r sup">${ico(resIcons[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
+      `<span class="r min">${ico(ri[0], 'min')}${min}</span>` +
+      `<span class="r gas">${ico(ri[1], 'gas')}${gas}</span>` +
+      `<span class="r sup">${ico(ri[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
   };
 
   let iw = 0, ih = 0, image = null;

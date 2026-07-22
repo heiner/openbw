@@ -39,9 +39,9 @@
     font: 600 13px system-ui, sans-serif; box-shadow: 0 6px 18px rgba(0,0,0,.55); pointer-events: none; z-index: 3; }
   #card .cost .m, #card .cost .g { display: inline-flex; align-items: center; gap: 4px; }
   #card .cost .g { margin-left: 10px; }
-  #card .cost .m::before, #card .cost .g::before { content: ''; width: 8px; height: 8px; border-radius: 50%; }
-  #card .cost .m { color: #6cb8ff; }  #card .cost .m::before { background: #6cb8ff; }
-  #card .cost .g { color: #4ade80; }  #card .cost .g::before { background: #4ade80; }
+  #card .cost .cico { height: 14px; width: auto; image-rendering: pixelated; }
+  #card .cost .m { color: #6cb8ff; }
+  #card .cost .g { color: #4ade80; }
   #card .cost::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%);
     border: 5px solid transparent; border-top-color: rgba(15,23,42,.98); }
   #card .cmd:hover .cost { display: block; }
