@@ -431,10 +431,13 @@ async function boot(race) {
       // Resource cost: tooltip on hover, and mark red when unaffordable.
       const minC = f.length > 4 ? +f[4] : 0, gasC = f.length > 5 ? +f[5] : 0;
       const poor = f.length > 6 && f[6] === '0' ? ' poor' : '';
-      const tip = (minC || gasC) ? ` title="${minC} minerals${gasC ? ', ' + gasC + ' gas' : ''}"` : '';
+      // Immediate cost popup shown on hover (native title tooltips are too slow to notice).
+      const cost = (minC || gasC)
+        ? `<span class="cost"><b class="m">${minC}</b>${gasC ? ` <b class="g">${gasC}</b>` : ''}</span>`
+        : '';
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
-      html += `<span class="cmd${off}${poor}" data-key="${f[0]}"${tip}>${ico}<span class="lbl">${labelHtml}</span></span>`;
+      html += `<span class="cmd${off}${poor}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${cost}</span>`;
     }
     cardEl.innerHTML = html;
   };
