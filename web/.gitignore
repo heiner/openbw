@@ -10,8 +10,10 @@ __pycache__/
 # browser build fetches these client-side)
 data/
 
-# downloaded test maps
-maps/
+# downloaded test maps — keep only the committed CC BY 4.0 map + its attribution
+maps/*
+!maps/Melancholy_v1.scx
+!maps/ATTRIBUTION.md
 
 # render dumps
 *.ppm

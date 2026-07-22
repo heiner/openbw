@@ -17,11 +17,11 @@ const MPQS = [
   { key: 'broodat',  local: './data/BROODAT.MPQ',  url: ARCHIVE_BASE + 'BROODAT.MPQ',  size: 23519727 },
   { key: 'patch_rt', local: './data/patch_rt.mpq', url: ARCHIVE_BASE + 'patch_rt.mpq', size: 636958   },
 ];
-// The melee map. Local dev reads the mirror under web/maps/ (gitignored); the
-// hosted site has no map committed, so it fetches MAP_REMOTE — set this to a
-// CORS-enabled URL of a .scx/.scm you host (e.g. an Internet Archive item).
-const MAP_LOCAL = './maps/Benzene.scx';
-const MAP_REMOTE = '';   // TODO: hosted map URL for openbw.heiner.ai
+// The melee map: a CC BY 4.0 map committed under web/maps/ and deployed with the
+// site (see web/maps/ATTRIBUTION.md). MAP_REMOTE is an optional fallback, used only
+// if a build ever ships without the map file.
+const MAP_LOCAL = './maps/Melancholy_v1.scx';
+const MAP_REMOTE = '';
 
 const $ = (id) => document.getElementById(id);
 const setBar = (f) => { $('bar').firstElementChild.style.width = (f * 100).toFixed(1) + '%'; };
@@ -252,6 +252,19 @@ async function boot(race) {
   };
   applyMute();
 
+  // Controls popup toggled by the "?" button; dismissed by clicking elsewhere.
+  const helpBtn = $('helpbtn'), helpPop = $('help');
+  helpBtn.style.display = 'block';
+  helpBtn.onclick = (e) => {
+    e.stopPropagation();
+    helpPop.style.display = helpPop.style.display === 'block' ? 'none' : 'block';
+  };
+  document.addEventListener('click', (e) => {
+    if (helpPop.style.display === 'block' && e.target !== helpBtn && !helpPop.contains(e.target)) {
+      helpPop.style.display = 'none';
+    }
+  });
+
   const assets = await loadAssets();
 
   let memory;
@@ -411,9 +424,13 @@ async function boot(race) {
       const labelHtml = k >= 0
         ? `${label.slice(0, k)}<b>${label[k]}</b>${label.slice(k + 1)}`
         : `<b>${f[0].toUpperCase()}</b> ${label}`;
+      // Resource cost: tooltip on hover, and mark red when unaffordable.
+      const minC = f.length > 4 ? +f[4] : 0, gasC = f.length > 5 ? +f[5] : 0;
+      const poor = f.length > 6 && f[6] === '0' ? ' poor' : '';
+      const tip = (minC || gasC) ? ` title="${minC} minerals${gasC ? ', ' + gasC + ' gas' : ''}"` : '';
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
-      html += `<span class="cmd${off}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span></span>`;
+      html += `<span class="cmd${off}${poor}" data-key="${f[0]}"${tip}>${ico}<span class="lbl">${labelHtml}</span></span>`;
     }
     cardEl.innerHTML = html;
   };
@@ -477,17 +494,44 @@ async function boot(race) {
       `<span class="r sup">${ico(resIcons[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
   };
 
+  // Selected-unit properties panel: "name\thp\tmaxhp\tshields\tmaxshields\tresources".
+  const selEl = $('unitinfo');
+  let lastSel = '';
+  const bar = (label, cur, max, color) => {
+    const pct = max > 0 ? Math.max(0, Math.min(100, 100 * cur / max)) : 0;
+    return `<div class="ui-bar"><span class="ui-lbl">${label}</span>` +
+      `<span class="bar"><i style="width:${pct}%;background:${color}"></i></span>` +
+      `<span class="ui-num">${cur}/${max}</span></div>`;
+  };
+  const updateSelection = () => {
+    const ptr = x.openbw_selection();
+    const text = ptr ? readCString(ptr) : '';
+    if (text === lastSel) return;
+    lastSel = text;
+    if (!text) { selEl.innerHTML = ''; return; }
+    const f = text.split('\t');
+    const name = f[0], hp = +f[1], maxhp = +f[2], sh = +f[3], maxsh = +f[4], res = +f[5];
+    const hpPct = maxhp > 0 ? 100 * hp / maxhp : 0;
+    const hpColor = hpPct > 66 ? '#4ade80' : hpPct > 33 ? '#facc15' : '#f87171';
+    let html = `<div class="ui-name">${name}</div>`;
+    html += bar('HP', hp, maxhp, hpColor);
+    if (maxsh >= 0) html += bar('Shields', sh, maxsh, '#38bdf8');
+    if (res >= 0) html += `<div class="ui-bar"><span class="ui-lbl">Resources</span><span class="ui-num res">${res}</span></div>`;
+    selEl.innerHTML = html;
+  };
+
   let iw = 0, ih = 0, image = null;
   // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
   // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
   // 1 targeting, 2 placing).
   const EDGE_CURSOR = ['', 'n-resize', 'ne-resize', 'e-resize', 'se-resize',
                        's-resize', 'sw-resize', 'w-resize', 'nw-resize'];
+  // 0 normal, 1 targeting, 2 placing, 3 hover-unit, 4 targeting-over-unit.
+  const MODE_CURSOR = ['default', 'crosshair', 'cell', 'pointer', 'crosshair'];
   let lastCursor = '';
   const updateCursor = () => {
     const edge = x.openbw_edge();
-    const cur = edge ? EDGE_CURSOR[edge]
-      : (m => m === 1 ? 'crosshair' : m === 2 ? 'cell' : 'default')(x.openbw_cursor());
+    const cur = edge ? EDGE_CURSOR[edge] : (MODE_CURSOR[x.openbw_cursor()] || 'default');
     if (cur === lastCursor) return;
     lastCursor = cur;
     canvas.style.cursor = cur;
@@ -504,6 +548,7 @@ async function boot(race) {
     updateCard();
     updateStatus();
     updateResources();
+    updateSelection();
     updateCursor();
     requestAnimationFrame(frame);
   }

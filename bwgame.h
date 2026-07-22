@@ -19091,7 +19091,7 @@ struct state_functions {
 				st.shared_vision[7] |= 1 << owner;
 				break;
 			default:
-				error("unknown ai script");
+				break;   // unknown/newer AI script id — ignore (irrelevant to melee)
 			}
 			return true;
 		case 22: // kill unit
@@ -19299,8 +19299,9 @@ struct state_functions {
 			}
 			return true;
 		default:
-			error("unknown trigger action %d", a.type);
-			return false;
+			// Unknown or newer (e.g. Remastered) trigger action: skip it and continue
+			// rather than aborting the whole game, so such maps still run.
+			return true;
 		}
 	}
 
@@ -21252,6 +21253,11 @@ struct game_load_functions : state_functions {
 			for (auto& v : tags) {
 				tag_t tag = std::get<0>(v);
 				auto i = chunks.find(tag);
+				// Remastered maps carry strings in "STRx" (32-bit) instead of "STR ".
+				if (i == chunks.end() && tag == tag_t("STR ")) {
+					i = chunks.find(tag_t("STRx"));
+					if (i != chunks.end()) tag = tag_t("STRx");
+				}
 				if (i == chunks.end()) {
 					if (std::get<1>(v)) error("map is missing required chunk '%s'", tagstr(tag));
 				} else {
@@ -21296,6 +21302,27 @@ struct game_load_functions : state_functions {
 			game_st.map_strings.resize(num);
 			for (size_t i = 0; i != num; ++i) {
 				size_t offset = r.get<uint16_t>();
+				auto t = start;
+				if (offset < t.left()) {
+					t.skip(offset);
+					char* b = (char*)t.ptr;
+					while (t.get<char>());
+					game_st.map_strings[i] = a_string(b, (char*)t.ptr - b - 1);
+				} else {
+					game_st.map_strings[i] = "<invalid string offset>";
+				}
+			}
+		};
+		// Remastered-format string table: identical to "STR " but with 32-bit count and
+		// offsets (read_chunks falls back to this when a map has no legacy "STR ").
+		tag_funcs["STRx"] = [&](data_reader_le r) {
+			if (r.left() < 4) return;
+			auto start = r;
+			size_t num = r.get<uint32_t>();
+			game_st.map_strings.clear();
+			game_st.map_strings.resize(num);
+			for (size_t i = 0; i != num; ++i) {
+				size_t offset = r.get<uint32_t>();
 				auto t = start;
 				if (offset < t.left()) {
 					t.skip(offset);
@@ -21832,7 +21859,7 @@ struct game_load_functions : state_functions {
 					{"UNIT", true}
 				});
 			}
-		} else if (version == 205) {
+		} else if (version == 205 || version == 206) {
 			if (use_map_settings) {
 				read_chunks({
 					{"STR ", true},
