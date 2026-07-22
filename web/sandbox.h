@@ -145,10 +145,11 @@ struct play_ui : ui_functions {
 	targ_t pending_targ = T_ATTACK;
 
 	enum cmd_act { C_MOVE, C_STOP, C_ATTACK, C_GATHER, C_HOLD, C_PATROL,
-	               C_BUILDMENU, C_BUILD, C_TRAIN, C_MORPH, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
+	               C_BUILDMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
 	               C_SELECT,     // select the player's units of cmd.ut (SCVs / Probes / Larvae)
-	               C_RALLY, C_RESEARCH };
-	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false; TechTypes tech = TechTypes::None; };
+	               C_RALLY, C_RESEARCH, C_UPGRADE };
+	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
+	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None; };
 	a_vector<cmd_t> card;
 	a_string card_text;                           // "title\nKEY\tLabel\tEN\n…" for the JS overlay
 	a_string status_text;                         // producer queue + progress, rebuilt per frame
@@ -275,30 +276,44 @@ struct play_ui : ui_functions {
 		card.push_back({'p', "Patrol", C_PATROL, UnitTypes::None});
 	}
 
-	// Proper unit/building name from stat_txt.tbl (loaded lazily), race prefix stripped —
-	// so the card title is e.g. "Overlord" / "Supply Depot" instead of "Unit"/"Building".
-	a_vector<a_string> unit_names;
-	const char* unit_name(UnitTypes id) {
-		if (unit_names.empty()) {
+	// Names from rez/stat_txt.tbl (loaded lazily), race prefix stripped — so labels read
+	// "Overlord" / "Supply Depot" / "Leg Enhancements" instead of "Unit"/"Building".
+	a_vector<a_string> stat_txt_names;
+	const char* stat_name(int i) {
+		if (stat_txt_names.empty()) {
 			a_vector<uint8_t> d;
 			load_data_file(d, "rez/stat_txt.tbl");
 			if (d.size() >= 2) {
 				int count = d[0] | (d[1] << 8);
-				unit_names.resize(count);
-				for (int i = 0; i != count; ++i) {
-					int off = d[2 + i * 2] | (d[3 + i * 2] << 8);
+				stat_txt_names.resize(count);
+				for (int j = 0; j != count; ++j) {
+					int off = d[2 + j * 2] | (d[3 + j * 2] << 8);
 					const char* s = (const char*)&d[off];
 					for (const char* pre : {"Terran ", "Protoss ", "Zerg "}) {   // strip race prefix
 						const char* a = s; const char* b = pre;
 						while (*b && *a == *b) { ++a; ++b; }
 						if (!*b) { s = a; break; }
 					}
-					unit_names[i] = s;
+					stat_txt_names[j] = s;
 				}
 			}
 		}
-		int i = (int)id;
-		return (i >= 0 && i < (int)unit_names.size()) ? unit_names[i].c_str() : "Unit";
+		return (i >= 0 && i < (int)stat_txt_names.size()) ? stat_txt_names[i].c_str() : "?";
+	}
+	const char* unit_name(UnitTypes id) { return stat_name((int)id); }
+	// upgrade/tech .label is a 1-based stat_txt index (0 = none), unlike the unit id.
+	const char* upgrade_name(const upgrade_type_t* up) { return stat_name(up->label - 1); }
+	const char* tech_name(const tech_type_t* te) { return stat_name(te->label - 1); }
+
+	// Pick a hotkey for `label`: first unused letter in the word, else any unused letter.
+	char pick_key(const char* label) {
+		auto used = [&](char c) { for (auto& cc : card) if (cc.key == c) return true; return false; };
+		for (const char* s = label; *s; ++s) {
+			char c = (*s >= 'A' && *s <= 'Z') ? (char)(*s + 32) : *s;
+			if (c >= 'a' && c <= 'z' && !used(c)) return c;
+		}
+		for (char c = 'a'; c <= 'z'; ++c) if (!used(c)) return c;
+		return '?';
 	}
 
 	// Select up to 12 of the player's units of a type — handy for the fiddly-to-click
@@ -314,85 +329,63 @@ struct play_ui : ui_functions {
 		on_selection(false);
 	}
 
-	// Push the current race's basic buildings into the build submenu (menu == 1).
-	void add_build_menu() {
-		using U = UnitTypes;
-		if (my_race == race_t::protoss) {
-			card.push_back({'p', "Pylon", C_BUILD, U::Protoss_Pylon});
-			card.push_back({'g', "Gateway", C_BUILD, U::Protoss_Gateway});
-			card.push_back({'a', "Assimilator", C_BUILD, U::Protoss_Assimilator});
-			card.push_back({'n', "Nexus", C_BUILD, U::Protoss_Nexus});
-			card.push_back({'f', "Forge", C_BUILD, U::Protoss_Forge});
-			card.push_back({'y', "Cybernetics Core", C_BUILD, U::Protoss_Cybernetics_Core});
-		} else if (my_race == race_t::zerg) {
-			card.push_back({'h', "Hatchery", C_BUILD, U::Zerg_Hatchery});
-			card.push_back({'s', "Spawning Pool", C_BUILD, U::Zerg_Spawning_Pool});
-			card.push_back({'e', "Extractor", C_BUILD, U::Zerg_Extractor});
-			card.push_back({'v', "Evolution Chamber", C_BUILD, U::Zerg_Evolution_Chamber});
-			card.push_back({'d', "Hydralisk Den", C_BUILD, U::Zerg_Hydralisk_Den});
-		} else {
-			card.push_back({'s', "Supply Depot", C_BUILD, U::Terran_Supply_Depot});
-			card.push_back({'b', "Barracks", C_BUILD, U::Terran_Barracks});
-			card.push_back({'r', "Refinery", C_BUILD, U::Terran_Refinery});
-			card.push_back({'e', "Engineering Bay", C_BUILD, U::Terran_Engineering_Bay});
-			card.push_back({'f', "Factory", C_BUILD, U::Terran_Factory});
-			card.push_back({'c', "Command Center", C_BUILD, U::Terran_Command_Center});
+	// Add everything `u` can currently produce — the whole tech tree, gated by the
+	// engine's own can-build/upgrade/research checks so a button appears as soon as its
+	// prerequisites are met. buildings_only splits the worker's build submenu (which
+	// lists buildings) from a producer's card (units/morphs + upgrades + research).
+	void add_producible(unit_t* u, bool buildings_only) {
+		bool worker = ut_worker(u), building = ut_building(u);
+		for (size_t i = 0; i != game_st.unit_types.vec.size(); ++i) {
+			const unit_type_t* t = get_unit_type((UnitTypes)i);
+			if (!unit_can_build(u, t)) continue;
+			bool tb = ut_building(t);
+			if (buildings_only != tb) continue;
+			cmd_act act = worker ? C_BUILD : building ? (tb ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
+			const char* nm = unit_name((UnitTypes)i);
+			card.push_back({pick_key(nm), nm, act, (UnitTypes)i});
+		}
+		if (buildings_only) return;
+		for (size_t i = 0; i != game_st.upgrade_types.vec.size(); ++i) {
+			const upgrade_type_t* up = get_upgrade_type((UpgradeTypes)i);
+			if (!unit_can_upgrade(u, up)) continue;
+			const char* nm = upgrade_name(up);
+			card.push_back({pick_key(nm), nm, C_UPGRADE, UnitTypes::None, false, TechTypes::None, up->id});
+		}
+		for (size_t i = 0; i != game_st.tech_types.vec.size(); ++i) {
+			const tech_type_t* te = get_tech_type((TechTypes)i);
+			if (!unit_can_research(u, te)) continue;
+			const char* nm = tech_name(te);
+			card.push_back({pick_key(nm), nm, C_RESEARCH, UnitTypes::None, false, te->id});
 		}
 	}
 
 	// The unit-specific part of the card (not the build submenu); returns the title.
 	const char* card_for_unit(unit_t* u, UnitTypes id) {
 		using U = UnitTypes;
-		// Workers (SCV / Probe / Drone): orders + gather + build submenu.
-		if (id == kit.worker) {
-			add_move_orders();
+		bool building = ut_building(u), worker = ut_worker(u);
+		// Movement orders for commandable mobile units (not buildings, larvae, eggs).
+		if (!building && !unit_is(u, U::Zerg_Larva) && !unit_is_egg(u)) add_move_orders();
+		if (worker) {
 			card.push_back({'g', "Gather", C_GATHER, U::None});
 			if (id == U::Terran_SCV) card.push_back({'r', "Repair", C_REPAIR, U::None});
 			card.push_back({'b', "Build", C_BUILDMENU, U::None});
-			return id == U::Protoss_Probe ? "Probe" : id == U::Zerg_Drone ? "Drone" : "SCV";
+		} else {
+			add_producible(u, false);   // train/morph units, upgrades, research
 		}
-		switch (id) {
-		// --- Terran ---
-		case U::Terran_Command_Center:
-			card.push_back({'s', "Train SCV", C_TRAIN, U::Terran_SCV}); return "Command Center";
-		case U::Terran_Barracks:
-			card.push_back({'m', "Marine", C_TRAIN, U::Terran_Marine});
-			card.push_back({'f', "Firebat", C_TRAIN, U::Terran_Firebat});
-			card.push_back({'c', "Medic", C_TRAIN, U::Terran_Medic});
-			card.push_back({'g', "Ghost", C_TRAIN, U::Terran_Ghost}); return "Barracks";
-		case U::Terran_Factory:
-			card.push_back({'v', "Vulture", C_TRAIN, U::Terran_Vulture});
-			card.push_back({'t', "Siege Tank", C_TRAIN, U::Terran_Siege_Tank_Tank_Mode});
-			card.push_back({'g', "Goliath", C_TRAIN, U::Terran_Goliath}); return "Factory";
-		case U::Terran_Marine:
-			add_move_orders(); card.push_back({'t', "Stim Pack", C_STIM, U::None}); return "Marine";
-		case U::Terran_Siege_Tank_Tank_Mode: case U::Terran_Siege_Tank_Tank_Mode_Turret:
-			add_move_orders(); card.push_back({'e', "Siege Mode", C_SIEGE, U::None}); return "Siege Tank";
-		case U::Terran_Siege_Tank_Siege_Mode: case U::Terran_Siege_Tank_Siege_Mode_Turret:
-			card.push_back({'d', "Tank Mode", C_UNSIEGE, U::None}); return "Siege Tank";
-		// --- Protoss ---
-		case U::Protoss_Nexus:
-			card.push_back({'p', "Train Probe", C_TRAIN, U::Protoss_Probe}); return "Nexus";
-		case U::Protoss_Gateway:
-			card.push_back({'z', "Zealot", C_TRAIN, U::Protoss_Zealot});
-			card.push_back({'d', "Dragoon", C_TRAIN, U::Protoss_Dragoon});
-			card.push_back({'t', "High Templar", C_TRAIN, U::Protoss_High_Templar}); return "Gateway";
-		// --- Zerg ---
-		case U::Zerg_Larva:
-			card.push_back({'d', "Drone", C_MORPH, U::Zerg_Drone});
-			card.push_back({'z', "Zergling", C_MORPH, U::Zerg_Zergling});
-			card.push_back({'o', "Overlord", C_MORPH, U::Zerg_Overlord});
-			card.push_back({'h', "Hydralisk", C_MORPH, U::Zerg_Hydralisk});
-			card.push_back({'m', "Mutalisk", C_MORPH, U::Zerg_Mutalisk}); return "Larva";
-		case U::Zerg_Hatchery: case U::Zerg_Lair: case U::Zerg_Hive:
-			card.push_back({'r', "Set Rally Point", C_RALLY, U::None});
-			card.push_back({'s', "Select Larva", C_SELECT, U::Zerg_Larva});
-			card.push_back({'b', "Evolve Burrow", C_RESEARCH, U::None, false, TechTypes::Burrowing});
-			return unit_name(id);
-		default: break;
+		if (building) {
+			bool produces = false;
+			for (auto& c : card) if (c.act == C_TRAIN || c.act == C_MORPHBLDG) { produces = true; break; }
+			if (produces) card.push_back({pick_key("Rally"), "Set Rally Point", C_RALLY, U::None});
+			if (id == U::Zerg_Hatchery || id == U::Zerg_Lair || id == U::Zerg_Hive)
+				card.push_back({pick_key("Larva"), "Select Larva", C_SELECT, U::Zerg_Larva});
 		}
-		if (ut_building(u)) return unit_name(id);
-		add_move_orders();
+		// Unit abilities (not part of the build/upgrade/research enumeration).
+		if (id == U::Terran_Marine || id == U::Terran_Firebat)
+			card.push_back({'t', "Stim Pack", C_STIM, U::None});
+		else if (id == U::Terran_Siege_Tank_Tank_Mode || id == U::Terran_Siege_Tank_Tank_Mode_Turret)
+			card.push_back({'e', "Siege Mode", C_SIEGE, U::None});
+		else if (id == U::Terran_Siege_Tank_Siege_Mode || id == U::Terran_Siege_Tank_Siege_Mode_Turret)
+			card.push_back({'d', "Tank Mode", C_UNSIEGE, U::None});
 		return unit_name(id);
 	}
 
@@ -406,20 +399,16 @@ struct play_ui : ui_functions {
 		if (!sel) { menu = 0; return; }
 
 		const char* title;
-		if (u && menu == 1) { title = "Build"; add_build_menu(); }
+		if (u && menu == 1) { title = "Build"; add_producible(u, true); }
 		else if (u) title = card_for_unit(u, u->unit_type->id);
 		else { title = unit_name(sel->unit_type->id); menu = 0; }   // neutral/enemy: name only, no actions
 
-		// Gray out commands whose requirements aren't met (e.g. Ghost w/o Academy,
-		// Stim before the upgrade is researched, a larva morph without its building).
+		// Everything enumerated is already do-able (the engine's can-build/upgrade/research
+		// checks gate it), so it's enabled; only the hardcoded abilities need a tech check.
 		for (auto& c : card) {
 			switch (c.act) {
-			case C_TRAIN:
-			case C_MORPH: c.enabled = unit_can_build(u, get_unit_type(c.ut)); break;
-			case C_BUILD: c.enabled = unit_build_order_valid(u, get_order_type(kit.build_order), get_unit_type(c.ut), my_player); break;
 			case C_STIM:  c.enabled = player_has_researched(my_player, TechTypes::Stim_Packs); break;
 			case C_SIEGE: c.enabled = player_has_researched(my_player, TechTypes::Tank_Siege_Mode); break;
-			case C_RESEARCH: c.enabled = !player_has_researched(my_player, c.tech) && !st.tech_researching[my_player][c.tech]; break;
 			default:      c.enabled = true;
 			}
 		}
@@ -438,7 +427,14 @@ struct play_ui : ui_functions {
 			// Icon frame for build/train buttons is the unit id; -1 for plain orders.
 			int icon = (c.ut != UnitTypes::None) ? (int)c.ut : -1;
 			int minc = 0, gasc = 0;   // resource cost of the thing this button makes
-			if (c.ut != UnitTypes::None && (c.act == C_BUILD || c.act == C_TRAIN || c.act == C_MORPH)) {
+			if (c.act == C_UPGRADE) {
+				const upgrade_type_t* up = get_upgrade_type(c.upg);
+				minc = upgrade_mineral_cost(my_player, up); gasc = upgrade_gas_cost(my_player, up);
+			} else if (c.act == C_RESEARCH) {
+				const tech_type_t* te = get_tech_type(c.tech);
+				minc = te->mineral_cost; gasc = te->gas_cost;
+			} else if (c.ut != UnitTypes::None &&
+			           (c.act == C_BUILD || c.act == C_TRAIN || c.act == C_MORPH || c.act == C_MORPHBLDG)) {
 				const unit_type_t* ut = get_unit_type(c.ut);
 				minc = ut->mineral_cost; gasc = ut->gas_cost;
 			}
@@ -539,9 +535,11 @@ struct play_ui : ui_functions {
 			case C_BUILD:     pending_build = get_unit_type(c.ut); menu = 0; refresh_card(); break;
 			case C_TRAIN:     sync_selection(); action_train(my_player, get_unit_type(c.ut)); break;
 			case C_MORPH:     sync_selection(); action_morph(my_player, get_unit_type(c.ut)); break;
+			case C_MORPHBLDG: sync_selection(); action_morph_building(my_player, get_unit_type(c.ut)); break;
 			case C_SELECT:    select_units_of_type(c.ut); break;
 			case C_RALLY:     start_target(T_RALLY); break;
 			case C_RESEARCH:  sync_selection(); action_research(my_player, get_tech_type(c.tech)); break;
+			case C_UPGRADE:   sync_selection(); action_upgrade(my_player, get_upgrade_type(c.upg)); break;
 			case C_STIM:      sync_selection(); action_stim_pack(my_player); break;
 			case C_SIEGE:     sync_selection(); action_siege(my_player, key_shift()); break;
 			case C_UNSIEGE:   sync_selection(); action_unsiege(my_player, key_shift()); break;
