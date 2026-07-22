@@ -409,7 +409,11 @@ async function boot(race) {
     lastCard = text;
     if (!text) { cardEl.innerHTML = ''; return; }
     const lines = text.split('\n');
-    let html = `<span class="title">${lines[0]}</span>`;
+    // Title line: name \t "HP x/y" \t <second stat, e.g. Shields / Minerals — may be empty>.
+    const t0 = lines[0].split('\t');
+    let html = `<span class="title">${t0[0]}</span>`;
+    if (t0[1]) html += `<span class="stat">${t0[1]}</span>`;
+    if (t0[2]) html += `<span class="stat">${t0[2]}</span>`;
     for (let i = 1; i < lines.length; i++) {
       const f = lines[i].split('\t');   // KEY, Label, enabled(1/0), iconUnitId(-1 = none)
       if (f.length < 2) continue;
@@ -494,32 +498,6 @@ async function boot(race) {
       `<span class="r sup">${ico(resIcons[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
   };
 
-  // Selected-unit properties panel: "name\thp\tmaxhp\tshields\tmaxshields\tresources".
-  const selEl = $('unitinfo');
-  let lastSel = '';
-  const bar = (label, cur, max, color) => {
-    const pct = max > 0 ? Math.max(0, Math.min(100, 100 * cur / max)) : 0;
-    return `<div class="ui-bar"><span class="ui-lbl">${label}</span>` +
-      `<span class="bar"><i style="width:${pct}%;background:${color}"></i></span>` +
-      `<span class="ui-num">${cur}/${max}</span></div>`;
-  };
-  const updateSelection = () => {
-    const ptr = x.openbw_selection();
-    const text = ptr ? readCString(ptr) : '';
-    if (text === lastSel) return;
-    lastSel = text;
-    if (!text) { selEl.innerHTML = ''; return; }
-    const f = text.split('\t');
-    const name = f[0], hp = +f[1], maxhp = +f[2], sh = +f[3], maxsh = +f[4], res = +f[5];
-    const hpPct = maxhp > 0 ? 100 * hp / maxhp : 0;
-    const hpColor = hpPct > 66 ? '#4ade80' : hpPct > 33 ? '#facc15' : '#f87171';
-    let html = `<div class="ui-name">${name}</div>`;
-    html += bar('HP', hp, maxhp, hpColor);
-    if (maxsh >= 0) html += bar('Shields', sh, maxsh, '#38bdf8');
-    if (res >= 0) html += `<div class="ui-bar"><span class="ui-lbl">Resources</span><span class="ui-num res">${res}</span></div>`;
-    selEl.innerHTML = html;
-  };
-
   let iw = 0, ih = 0, image = null;
   // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
   // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
@@ -548,7 +526,6 @@ async function boot(race) {
     updateCard();
     updateStatus();
     updateResources();
-    updateSelection();
     updateCursor();
     requestAnimationFrame(frame);
   }

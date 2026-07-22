@@ -153,7 +153,6 @@ struct play_ui : ui_functions {
 	a_string card_text;                           // "title\nKEY\tLabel\tEN\n…" for the JS overlay
 	a_string status_text;                         // producer queue + progress, rebuilt per frame
 	a_string resources_text;                      // minerals/gas/supply HUD, rebuilt per frame
-	a_string sel_text;                            // selected-unit properties, rebuilt per frame
 
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
@@ -401,11 +400,15 @@ struct play_ui : ui_functions {
 	void refresh_card() {
 		card.clear();
 		card_text.clear();
-		unit_t* u = primary_selected();
-		if (!u) { menu = 0; return; }
+		unit_t* u = primary_selected();          // own unit — drives the action buttons
+		unit_t* sel = u;                          // the unit we describe (own preferred, else first)
+		if (!sel) for (auto uid : current_selection) { sel = get_unit(uid); if (sel) break; }
+		if (!sel) { menu = 0; return; }
+
 		const char* title;
-		if (menu == 1) { title = "Build"; add_build_menu(); }
-		else title = card_for_unit(u, u->unit_type->id);
+		if (u && menu == 1) { title = "Build"; add_build_menu(); }
+		else if (u) title = card_for_unit(u, u->unit_type->id);
+		else { title = unit_name(sel->unit_type->id); menu = 0; }   // neutral/enemy: name only, no actions
 
 		// Gray out commands whose requirements aren't met (e.g. Ghost w/o Academy,
 		// Stim before the upgrade is researched, a larva morph without its building).
@@ -420,7 +423,17 @@ struct play_ui : ui_functions {
 			default:      c.enabled = true;
 			}
 		}
+
+		// Title line carries the unit's status: "name \t HP x/y \t <second stat, or empty>".
+		int hp = sel->hp.ceil().integer_part(), maxhp = sel->unit_type->hitpoints.ceil().integer_part();
+		a_string stat2;
+		if (sel->unit_type->has_shield)
+			stat2 = format("Shields %d/%d", sel->shield_points.integer_part(), sel->unit_type->shield_points);
+		else if (ut_resource(sel))
+			stat2 = format("%s %d", unit_is_mineral_field(sel) ? "Minerals" : "Gas", sel->building.resource.resource_count);
 		card_text += title;
+		card_text += '\t'; card_text += format("HP %d/%d", hp, maxhp).c_str();
+		card_text += '\t'; card_text += stat2.c_str();
 		for (auto& c : card) {
 			// Icon frame for build/train buttons is the unit id; -1 for plain orders.
 			int icon = (c.ut != UnitTypes::None) ? (int)c.ut : -1;
@@ -491,23 +504,6 @@ struct play_ui : ui_functions {
 		if (max > 200) max = 200;
 		resources_text = format("%d\t%d\t%d\t%d", (int)st.current_minerals[p], (int)st.current_gas[p], used, max);
 		return resources_text.c_str();
-	}
-
-	// Properties of the first selected unit (any owner, so neutral mineral fields work):
-	// "name\thp\tmaxhp\tshields\tmaxshields\tresources" (-1 where not applicable).
-	const char* selection() {
-		sel_text.clear();
-		unit_t* u = nullptr;
-		for (auto uid : current_selection) { u = get_unit(uid); if (u) break; }
-		if (!u) return "";
-		int hp = u->hp.ceil().integer_part();
-		int maxhp = u->unit_type->hitpoints.ceil().integer_part();
-		int sh = -1, maxsh = -1;
-		if (u->unit_type->has_shield) { sh = u->shield_points.integer_part(); maxsh = u->unit_type->shield_points; }
-		int res = -1;
-		if (ut_resource(u)) res = u->building.resource.resource_count;
-		sel_text = format("%s\t%d\t%d\t%d\t%d\t%d", unit_name(u->unit_type->id), hp, maxhp, sh, maxsh, res);
-		return sel_text.c_str();
 	}
 
 	// Is there a unit under the current cursor position?

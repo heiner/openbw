@@ -148,11 +148,6 @@ OPENBW_EXPORT(openbw_cursor) int openbw_cursor() {
 	return g_ui ? g_ui->cursor() : 0;
 }
 
-// Selected-unit properties "name\thp\tmaxhp\tshields\tmaxshields\tresources" (empty if none).
-OPENBW_EXPORT(openbw_selection) const char* openbw_selection() {
-	return g_ui ? g_ui->selection() : "";
-}
-
 // Render a command-button icon (frame == unit id) to RGBA; returns a pointer into
 // wasm memory valid until the next call, with the size in openbw_icon_w/h.
 OPENBW_EXPORT(openbw_icon) const uint8_t* openbw_icon(int frame) {

@@ -33,17 +33,7 @@
   #card .cmd:not(.off):hover { background: rgba(51,65,85,.95); }
   #card .cmd.off { cursor: default; }
   #card .cmd.poor .lbl { color: #f87171; }   /* can't afford */
-  #unitinfo { position: fixed; left: 50%; transform: translateX(-50%); bottom: 8px; z-index: 4;
-    min-width: 190px; padding: 8px 12px; border-radius: 8px; background: rgba(0,0,0,.5);
-    color: #cbd5e1; font: 12px system-ui, sans-serif; pointer-events: none; }
-  #unitinfo:empty { display: none; }
-  #unitinfo .ui-name { font-weight: 700; color: #e2e8f0; margin-bottom: 4px; }
-  #unitinfo .ui-bar { display: flex; align-items: center; gap: 6px; margin: 2px 0; }
-  #unitinfo .ui-lbl { width: 58px; color: #94a3b8; }
-  #unitinfo .ui-bar .bar { width: 90px; height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; }
-  #unitinfo .ui-bar .bar > i { display: block; height: 100%; }
-  #unitinfo .ui-num { min-width: 46px; text-align: right; color: #e2e8f0; }
-  #unitinfo .ui-num.res { color: #6cb8ff; }
+  #card .stat { color: #94a3b8; margin-right: 2px; }   /* HP / shields / resources text */
   #card .cmd .ico { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; }
   #card .cmd.off .ico { filter: grayscale(1) brightness(.6); }
   #card .cmd b { color: #38bdf8; }
@@ -100,7 +90,6 @@
   <div class="row"><kbd>Esc</kbd> cancels targeting / building placement</div>
 </div>
 <div id="status"></div>
-<div id="unitinfo"></div>
 <div id="card"></div>
 
 <div id="overlay"><div class="card">
