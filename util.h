@@ -7,6 +7,11 @@
 #include <array>
 #include <type_traits>
 
+#ifdef OPENBW_NO_EXCEPTIONS
+#include <cstdio>
+#include <cstdlib>
+#endif
+
 #include "containers.h"
 #include "strf.h"
 
@@ -831,8 +836,16 @@ struct exception : std::runtime_error {
 };
 
 template<typename...T>
-void error(const char* fmt, T&&... args) {
+[[noreturn]] void error(const char* fmt, T&&... args) {
+#ifdef OPENBW_NO_EXCEPTIONS
+	// Targets without a C++ exception runtime (e.g. wasi-sdk libc++ built
+	// -fno-exceptions). OpenBW has essentially no try/catch, so a fatal
+	// error is terminal anyway; log and abort.
+	std::fprintf(stderr, "openbw fatal: %s\n", format(fmt, std::forward<T>(args)...).c_str());
+	std::abort();
+#else
 	throw exception(format(fmt, std::forward<T>(args)...));
+#endif
 }
 
 }

@@ -8,6 +8,23 @@
 #include <type_traits>
 #include <initializer_list>
 
+#ifndef BWGAME_EXCEPT_MACROS
+#define BWGAME_EXCEPT_MACROS
+// See static_vector.h — build without a C++ exception runtime.
+#ifdef OPENBW_NO_EXCEPTIONS
+#include <cstdlib>
+#define BWGAME_TRY
+#define BWGAME_CATCH(...) while (false)
+#define BWGAME_THROW(...) std::abort()
+#define BWGAME_RETHROW std::abort()
+#else
+#define BWGAME_TRY try
+#define BWGAME_CATCH(...) catch (__VA_ARGS__)
+#define BWGAME_THROW(...) throw __VA_ARGS__
+#define BWGAME_RETHROW throw
+#endif
+#endif
+
 namespace bwgame {
 
 template<typename allocator_T, bool>
@@ -259,17 +276,17 @@ private:
 		for (pointer src = m_begin; src != m_end; src = next(src), ++dst) {
 			new (dst) value_type(std::move(*src));
 		}
-		try {
+		BWGAME_TRY {
 			for (; dst != new_end; ++dst) {
 				new (dst) value_type(std::forward<T>(args)...);
 			}
-		} catch (...) {
+		} BWGAME_CATCH(...) {
 			for (pointer i = dst; i != new_data;) {
 				--i;
 				m_destroy(i);
 			}
 			get_allocator().deallocate(new_data, new_capacity + 1);
-			throw;
+			BWGAME_RETHROW;
 		}
 		return new_data;
 	}
@@ -278,20 +295,20 @@ private:
 		pointer new_data = get_allocator().allocate(new_capacity + 1);
 		pointer dst = new_data;
 		pointer new_end = new_data + new_capacity + 1;
-		try {
+		BWGAME_TRY {
 			for (pointer src = m_begin; src != m_end; src = next(src), ++dst) {
 				new (dst) value_type(*src);
 			}
 			for (; dst != new_end; ++dst) {
 				new (dst) value_type(std::forward<T>(args)...);
 			}
-		} catch (...) {
+		} BWGAME_CATCH(...) {
 			for (pointer i = dst; i != new_data;) {
 				--i;
 				m_destroy(i);
 			}
 			get_allocator().deallocate(new_data, new_capacity + 1);
-			throw;
+			BWGAME_RETHROW;
 		}
 		return new_data;
 	}
@@ -308,34 +325,34 @@ private:
 	pointer m_reallocate_no_construct(size_t new_capacity) {
 		pointer new_data = get_allocator().allocate(new_capacity + 1);
 		pointer dst = new_data;
-		try {
+		BWGAME_TRY {
 			for (pointer src = m_begin; src != m_end; src = next(src), ++dst) {
 				new (dst) value_type(*src);
 			}
-		} catch (...) {
+		} BWGAME_CATCH(...) {
 			for (pointer i = dst; i != new_data;) {
 				--i;
 				m_destroy(i);
 			}
 			get_allocator().deallocate(new_data, new_capacity + 1);
-			throw;
+			BWGAME_RETHROW;
 		}
 		return new_data;
 	}
 	pointer m_reallocate_copy(size_t new_capacity, const circular_vector& other) {
 		pointer new_data = get_allocator().allocate(new_capacity + 1);
 		pointer dst = new_data;
-		try {
+		BWGAME_TRY {
 			for (pointer src = other.m_begin; src != other.m_end; src = other.next(src), ++dst) {
 				new (dst) value_type(*src);
 			}
-		} catch (...) {
+		} BWGAME_CATCH(...) {
 			for (pointer i = dst; i != new_data;) {
 				--i;
 				m_destroy(i);
 			}
 			get_allocator().deallocate(new_data, new_capacity + 1);
-			throw;
+			BWGAME_RETHROW;
 		}
 		return new_data;
 	}
@@ -343,17 +360,17 @@ private:
 	pointer m_reallocate_copy(size_t new_capacity, iterator_T begin, iterator_T end) {
 		pointer new_data = get_allocator().allocate(new_capacity + 1);
 		pointer dst = new_data;
-		try {
+		BWGAME_TRY {
 			for (auto src = begin; src != end; ++src, ++dst) {
 				new (dst) value_type(*src);
 			}
-		} catch (...) {
+		} BWGAME_CATCH(...) {
 			for (pointer i = dst; i != new_data;) {
 				--i;
 				m_destroy(i);
 			}
 			get_allocator().deallocate(new_data, new_capacity + 1);
-			throw;
+			BWGAME_RETHROW;
 		}
 		return new_data;
 	}
@@ -365,7 +382,7 @@ private:
 		if (increase > remaining_cap) increase = remaining_cap;
 		if (sizeof(T) * increase < 0x20) {
 			increase = (0x20 + sizeof(T) - 1) / sizeof(T);
-			if (increase > remaining_cap) throw std::length_error("circular_vector exceeded maximum size");
+			if (increase > remaining_cap) BWGAME_THROW(std::length_error("circular_vector exceeded maximum size"));
 		}
 		size_t new_cap = cap + increase;
 		pointer new_data = m_reallocate_no_construct(new_cap);
@@ -397,14 +414,14 @@ private:
 		} else if (count > size()) {
 			pointer new_end = increment(m_begin, count);
 			for (pointer i = m_end; i != new_end; i = next(i)) {
-				try {
+				BWGAME_TRY {
 					new (i) value_type(std::forward<T>(args)...);
-				} catch (...) {
+				} BWGAME_CATCH(...) {
 					for (pointer i2 = i; i2 != m_end;) {
 						i = prev(i2);
 						m_destroy(i2);
 					}
-					throw;
+					BWGAME_RETHROW;
 				}
 			}
 			m_end = new_end;
@@ -521,11 +538,11 @@ public:
 		return *this;
 	}
 	reference at(size_type pos) {
-		if (pos >= size()) throw std::out_of_range("circular_vector subscript out of range");
+		if (pos >= size()) BWGAME_THROW(std::out_of_range("circular_vector subscript out of range"));
 		return *increment(m_begin, pos);
 	}
 	const_reference at(size_type pos) const {
-		if (pos >= size()) throw std::out_of_range("circular_vector subscript out of range");
+		if (pos >= size()) BWGAME_THROW(std::out_of_range("circular_vector subscript out of range"));
 		return *increment(m_begin, pos);
 	}
 	reference operator[](size_type pos) {

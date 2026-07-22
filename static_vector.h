@@ -5,6 +5,25 @@
 #include <iterator>
 #include <array>
 
+#ifndef BWGAME_EXCEPT_MACROS
+#define BWGAME_EXCEPT_MACROS
+// Allow building without a C++ exception runtime (e.g. wasi-sdk libc++).
+// OpenBW's containers use throw only for hard bounds/capacity failures and
+// element-ctor exception-safety; with -fno-exceptions those become abort.
+#ifdef OPENBW_NO_EXCEPTIONS
+#include <cstdlib>
+#define BWGAME_TRY
+#define BWGAME_CATCH(...) while (false)
+#define BWGAME_THROW(...) std::abort()
+#define BWGAME_RETHROW std::abort()
+#else
+#define BWGAME_TRY try
+#define BWGAME_CATCH(...) catch (__VA_ARGS__)
+#define BWGAME_THROW(...) throw __VA_ARGS__
+#define BWGAME_RETHROW throw
+#endif
+#endif
+
 namespace bwgame {
 
 template<typename T, size_t max_elements>
@@ -182,17 +201,17 @@ private:
 	pointer m_end = ptr_begin();
 	template<typename... args_T>
 	void m_resize(size_type count, args_T&&... args) {
-		if (count > capacity()) throw std::length_error("static_vector resized beyond capacity");
+		if (count > capacity()) BWGAME_THROW(std::length_error("static_vector resized beyond capacity"));
 		pointer e = ptr_begin() + count;
 		if (e > ptr_end()) {
 			for (pointer i = ptr_end(); i != e; ++i) {
-				try {
+				BWGAME_TRY {
 					new (i) value_type(std::forward<T>(args)...);
-				} catch (...) {
+				} BWGAME_CATCH(...) {
 					for (pointer i2 = i; i2 > ptr_end(); --i2) {
 						m_destroy(i2 - 1);
 					}
-					throw;
+					BWGAME_RETHROW;
 				}
 			}
 		} else {
@@ -218,13 +237,13 @@ private:
 		}
 		auto e = ptr_begin() + other.size();
 		for (; src_i != other.ptr_end(); ++src_i, ++dst_i) {
-			try {
+			BWGAME_TRY {
 				new (dst_i) value_type(*src_i);
-			} catch (...) {
+			} BWGAME_CATCH(...) {
 				for (pointer i2 = dst_i; i2 > ptr_end(); --i2) {
 					m_destroy(i2 - 1);
 				}
-				throw;
+				BWGAME_RETHROW;
 			}
 		}
 		m_end = e;
@@ -236,13 +255,13 @@ private:
 		pointer dst_i = ptr_begin();
 		auto e = ptr_begin() + other.size();
 		for (; src_i != other.ptr_end(); ++src_i, ++dst_i) {
-			try {
+			BWGAME_TRY {
 				new (dst_i) value_type(*src_i);
-			} catch (...) {
+			} BWGAME_CATCH(...) {
 				for (pointer i2 = dst_i; i2 > ptr_end(); --i2) {
 					m_destroy(i2 - 1);
 				}
-				throw;
+				BWGAME_RETHROW;
 			}
 		}
 		m_end = e;
@@ -329,11 +348,11 @@ public:
 		return *this;
 	}
 	reference at(size_type pos) {
-		if (pos >= size()) throw std::out_of_range("static_vector subscript out of range");
+		if (pos >= size()) BWGAME_THROW(std::out_of_range("static_vector subscript out of range"));
 		return *(ptr_begin() + pos);
 	}
 	const_reference at(size_type pos) const {
-		if (pos >= size()) throw std::out_of_range("static_vector subscript out of range");
+		if (pos >= size()) BWGAME_THROW(std::out_of_range("static_vector subscript out of range"));
 		return *(ptr_begin() + pos);
 	}
 	reference operator[](size_type pos) {
@@ -412,18 +431,18 @@ public:
 		m_clear();
 	}
 	void push_back(const T& value) {
-		if (size() == capacity()) throw std::length_error("static_vector resized beyond capacity");
+		if (size() == capacity()) BWGAME_THROW(std::length_error("static_vector resized beyond capacity"));
 		new (ptr_end()) value_type(value);
 		m_end = ptr_end() + 1;
 	}
 	void push_back(T&& value) {
-		if (size() == capacity()) throw std::length_error("static_vector resized beyond capacity");
+		if (size() == capacity()) BWGAME_THROW(std::length_error("static_vector resized beyond capacity"));
 		new (ptr_end()) value_type(std::move(value));
 		m_end = ptr_end() + 1;
 	}
 	template<typename... args_T>
 	void emplace_back(args_T&&... args) {
-		if (size() == capacity()) throw std::length_error("static_vector resized beyond capacity");
+		if (size() == capacity()) BWGAME_THROW(std::length_error("static_vector resized beyond capacity"));
 		new (ptr_end()) value_type(std::forward<args_T>(args)...);
 		m_end = ptr_end() + 1;
 	}

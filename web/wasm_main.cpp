@@ -1,0 +1,123 @@
+// web/wasm_main.cpp — browser (wasm) entry point for the single-player sandbox.
+//
+// Reactor-model module: JS calls _initialize() once, then openbw_init() after
+// the MPQ bytes are available, then openbw_step() (timer) + openbw_render()
+// (animation frame). File
+// bytes come from JS through the js_read_data / js_file_size imports (the same
+// pattern the old Emscripten build used); rendering goes to the framebuffer in
+// web/wasm_backend.cpp, which JS blits to a <canvas>.
+
+#include "sandbox.h"
+
+#include <cstdio>
+#include <cstdlib>
+#include <cctype>
+
+using namespace bwgame;
+
+// --- imports provided by the JS host ------------------------------------
+extern "C" {
+__attribute__((import_module("env"), import_name("js_read_data")))
+void js_read_data(int index, void* dst, unsigned offset, unsigned n);
+__attribute__((import_module("env"), import_name("js_file_size")))
+unsigned js_file_size(int index);
+}
+
+// --- logging sinks required by ui/common.h ------------------------------
+namespace bwgame {
+namespace ui {
+void log_str(a_string str) { fwrite(str.data(), str.size(), 1, stdout); fflush(stdout); }
+void fatal_error_str(a_string str) { fprintf(stderr, "openbw fatal: %s\n", str.c_str()); abort(); }
+}
+}
+
+// --- file reader bridged to JS ------------------------------------------
+// Archive index mapping (JS must provide matching bytes):
+//   0 StarDat.mpq   1 BrooDat.mpq   2 Patch_rt.mpq   3 the map (.scx/.scm)
+namespace bwgame {
+namespace data_loading {
+
+template<bool default_little_endian = true>
+struct js_file_reader {
+	size_t index = 3;
+	size_t file_pointer = 0;
+	js_file_reader() = default;
+	explicit js_file_reader(a_string filename) { open(std::move(filename)); }
+	void open(a_string filename) {
+		a_string low;
+		for (char c : filename) low += (char)std::tolower((unsigned char)c);
+		auto has = [&](const char* s) { return low.find(s) != a_string::npos; };
+		if (has("stardat")) index = 0;
+		else if (has("brood")) index = 1;
+		else if (has("patch")) index = 2;
+		else index = 3;   // the map archive
+	}
+	void get_bytes(uint8_t* dst, size_t n) {
+		js_read_data((int)index, dst, (unsigned)file_pointer, (unsigned)n);
+		file_pointer += n;
+	}
+	void seek(size_t offset) { file_pointer = offset; }
+	size_t tell() const { return file_pointer; }
+	size_t size() { return js_file_size((int)index); }
+};
+
+}
+}
+
+// --- game globals -------------------------------------------------------
+namespace {
+using loader_t = data_loading::data_files_loader<data_loading::mpq_file<data_loading::js_file_reader<>>>;
+loader_t* g_loader = nullptr;
+play_ui* g_ui = nullptr;
+}
+
+#define OPENBW_EXPORT(name) __attribute__((export_name(#name))) extern "C"
+
+// Build the game. Call after all four archives' bytes are available in JS.
+OPENBW_EXPORT(openbw_init) void openbw_init(int width, int height, int race, int slot) {
+	g_loader = new loader_t(data_loading::data_files_directory<loader_t>(""));
+
+	game_player player(*g_loader);
+	g_ui = new play_ui(std::move(player), slot, (race_t)race);
+	g_ui->exit_on_close = false;
+	g_ui->load_data_file = [](a_vector<uint8_t>& data, a_string filename) {
+		(*g_loader)(data, std::move(filename));
+	};
+	g_ui->init();
+
+	data_loading::mpq_file<data_loading::js_file_reader<>> map_loader("openbw.map");
+	setup_melee(g_ui->player.st(), map_loader, slot, (race_t)race);
+
+	g_ui->wnd.create("OpenBW", 0, 0, width, height);
+	g_ui->resize(width, height);
+	g_ui->set_image_data();
+	xy start = g_ui->game_st.start_locations[slot];
+	g_ui->screen_pos = start - xy(width / 2, height / 2);
+
+	ui::log("openbw_init: map '%s' %dx%d, slot %d, units=%d, fog_player=%d\n",
+		g_ui->game_st.scenario_name, (int)g_ui->game_st.map_width,
+		(int)g_ui->game_st.map_height, slot, count_units(g_ui->player.st(), slot),
+		g_ui->fog_player);
+}
+
+// Resize the render target (e.g. when the browser window changes). Recreates
+// the framebuffer at the new size; ui.resize() rebuilds the surfaces.
+OPENBW_EXPORT(openbw_resize) void openbw_resize(int width, int height) {
+	if (!g_ui) return;
+	g_ui->wnd.destroy();
+	g_ui->wnd.create("OpenBW", 0, 0, width, height);
+	g_ui->resize(width, height);
+}
+
+// One simulation frame. JS drives this from a fixed-interval timer, so it keeps
+// ticking (throttled) while the tab is backgrounded and never fast-forwards a
+// backlog on return — unlike advancing by elapsed wall-clock time.
+OPENBW_EXPORT(openbw_step) void openbw_step() {
+	if (g_ui) g_ui->state_functions::next_frame();
+}
+
+// Render the current state into the framebuffer and process input. JS drives
+// this from requestAnimationFrame.
+OPENBW_EXPORT(openbw_render) void openbw_render() {
+	if (g_ui) g_ui->update();
+}

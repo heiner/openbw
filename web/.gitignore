@@ -1,0 +1,17 @@
+# build output
+openbw_play
+*.wasm
+*.dSYM/
+build.err
+build.log
+
+# downloaded game assets (copyrighted — fetched locally for dev only; the
+# browser build fetches these client-side)
+data/
+
+# downloaded test maps
+maps/
+
+# render dumps
+*.ppm
+*.png

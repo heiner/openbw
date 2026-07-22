@@ -557,6 +557,18 @@ struct ui_functions: ui_util_functions {
 	bool create_window = true;
 	bool draw_ui_elements = true;
 
+	// Fog of war: render from one player's perspective. -1 = show everything
+	// (replay/observer, the default). >= 0 = that player's vision: bright where
+	// currently visible, dimmed where explored, black where unexplored.
+	int fog_player = -1;
+	int fog_level = 16;   // dark.pcx darkness row for explored-but-not-visible
+	a_vector<uint8_t> fog_level_grid;   // per-frame scratch for the fog overlay
+
+	// Live-play input hook: a subclass may intercept input events (e.g. to issue
+	// unit commands) before the default replay-viewer handling. Returning true
+	// consumes the event. Default: no-op, so the replay viewer is unchanged.
+	virtual bool handle_game_input(const native_window::event_t&) { return false; }
+
 	bool exit_on_close = true;
 	bool window_closed = false;
 
@@ -769,6 +781,72 @@ struct ui_functions: ui_util_functions {
 		return {{from_tile_x, from_tile_y}, {to_tile_x, to_tile_y}};
 	}
 
+
+	// Per-tile darkness level for fog_player: 31 = visible (bright), fog_level =
+	// explored but not currently seen, 0 = unexplored (black). tile.visible /
+	// .explored are bitmasks where the player's bit SET = hidden (tiles init to
+	// 0xff; revealing clears the bit). Off-map reads as unexplored.
+	int fog_tile_level(int tx, int ty, uint8_t mask) const {
+		if (tx < 0 || ty < 0 || tx >= (int)game_st.map_tile_width || ty >= (int)game_st.map_tile_height) return 0;
+		const auto& t = st.tiles[(size_t)ty * game_st.map_tile_width + tx];
+		if ((t.visible & mask) == 0) return 31;
+		if ((t.explored & mask) == 0) return fog_level;
+		return 0;
+	}
+
+	// Smooth fog-of-war overlay. Instead of darkening each 32x32 tile uniformly
+	// (hard edges), we bilinearly interpolate the per-tile darkness level —
+	// sampled at tile centers — across every pixel, then remap through dark.pcx.
+	// This yields a soft gradient at vision boundaries. Applied over terrain and
+	// sprites, so anything in the dark is dimmed together.
+	void draw_fog(uint8_t* data, size_t data_pitch) {
+		uint8_t mask = (uint8_t)(1 << fog_player);
+		const uint8_t* dark = tileset_img.dark_pcx.data.data();
+
+		// Build a level grid covering the visible tiles plus a one-tile border,
+		// so the bilinear taps (tile and tile+1) never read out of bounds.
+		auto tb = screen_tile_bounds();
+		int base_tx = (int)tb.from.x - 1, base_ty = (int)tb.from.y - 1;
+		int gw = (int)(tb.to.x - tb.from.x) + 3;
+		int gh = (int)(tb.to.y - tb.from.y) + 3;
+		fog_level_grid.resize((size_t)gw * gh);
+		for (int gy = 0; gy != gh; ++gy)
+			for (int gx = 0; gx != gw; ++gx)
+				fog_level_grid[(size_t)gy * gw + gx] = (uint8_t)fog_tile_level(base_tx + gx, base_ty + gy, mask);
+
+		for (int sy = 0; sy != (int)screen_height; ++sy) {
+			int my = screen_pos.y + sy - 16;               // tile centers sit at +16
+			int ty = my >= 0 ? my / 32 : -((-my + 31) / 32);
+			int fy = my - ty * 32;                         // 0..31 within the cell
+			int gy = ty - base_ty;
+			if (gy < 0) gy = 0; else if (gy > gh - 2) gy = gh - 2;
+			const uint8_t* g0 = &fog_level_grid[(size_t)gy * gw];
+			const uint8_t* g1 = g0 + gw;
+			uint8_t* row = data + (size_t)sy * data_pitch;
+			for (int sx = 0; sx != (int)screen_width; ++sx) {
+				int mx = screen_pos.x + sx - 16;
+				int tx = mx >= 0 ? mx / 32 : -((-mx + 31) / 32);
+				int fx = mx - tx * 32;
+				int gx = tx - base_tx;
+				if (gx < 0) gx = 0; else if (gx > gw - 2) gx = gw - 2;
+				int top = g0[gx] * (32 - fx) + g0[gx + 1] * fx;
+				int bot = g1[gx] * (32 - fx) + g1[gx + 1] * fx;
+				int level = (top * (32 - fy) + bot * fy) >> 10;   // / (32*32)
+				if (level >= 31) continue;                        // fully lit
+				row[sx] = dark[256 * level + row[sx]];
+			}
+		}
+	}
+
+	// Is a sprite's tile explored by fog_player? (Used to hide sprites in the
+	// black unexplored area.) True when fog is off.
+	bool sprite_position_explored(const sprite_t* sprite) const {
+		if (fog_player < 0) return true;
+		xy pos = sprite->position;
+		if (pos.x < 0 || pos.y < 0) return false;
+		// fog_tile_level returns 0 only for unexplored (or off-map) tiles.
+		return fog_tile_level(pos.x / 32, pos.y / 32, (uint8_t)(1 << fog_player)) != 0;
+	}
 
 	void draw_tiles(uint8_t* data, size_t data_pitch) {
 
@@ -1249,6 +1327,7 @@ struct ui_functions: ui_util_functions {
 		}
 
 		for (auto& v : sorted_sprites) {
+			if (fog_player >= 0 && !sprite_position_explored(v.second)) continue;
 			draw_sprite(v.second, data, data_pitch);
 		}
 
@@ -1349,6 +1428,7 @@ struct ui_functions: ui_util_functions {
 		uint8_t* p = data + data_pitch * (size_t)area.from.y + (size_t)area.from.x;
 
 		size_t pitch = data_pitch - game_st.map_tile_width;
+		uint8_t fog_mask = fog_player >= 0 ? (uint8_t)(1 << fog_player) : 0;
 		for (size_t y = 0; y != game_st.map_tile_height; ++y) {
 			for (size_t x = 0; x != game_st.map_tile_width; ++x) {
 				size_t index;
@@ -1359,7 +1439,10 @@ struct ui_functions: ui_util_functions {
 				auto val = bitmap[55 / sizeof(vr4_entry::bitmap_t)];
 				size_t shift = 8 * (55 % sizeof(vr4_entry::bitmap_t));
 				val >>= shift;
-				*p++ = (uint8_t)val;
+				uint8_t out = (uint8_t)val;
+				if (fog_player >= 0)
+					out = tileset_img.dark_pcx.data[256 * fog_tile_level((int)x, (int)y, fog_mask) + out];
+				*p++ = out;
 			}
 			p += pitch;
 		}
@@ -1368,6 +1451,7 @@ struct ui_functions: ui_util_functions {
 			--i;
 			for (unit_t* u : ptr(st.player_units[i])) {
 				if (!unit_visble_on_minimap(u)) continue;
+				if (fog_player >= 0 && !sprite_position_explored(u->sprite)) continue;
 				int color = img.player_minimap_colors.at(st.players[u->owner].color);
 				size_t w = u->unit_type->placement_size.x / 32u;
 				size_t h = u->unit_type->placement_size.y / 32u;
@@ -1802,6 +1886,7 @@ struct ui_functions: ui_util_functions {
 		if (wnd) {
 			native_window::event_t e;
 			while (wnd.peek_message(e)) {
+				if (handle_game_input(e)) continue;
 				switch (e.type) {
 				case native_window::event_t::type_quit:
 					if (exit_on_close) std::exit(0);
@@ -1946,6 +2031,7 @@ struct ui_functions: ui_util_functions {
 		uint8_t* data = (uint8_t*)indexed_surface->lock();
 		draw_tiles(data, indexed_surface->pitch);
 		draw_sprites(data, indexed_surface->pitch);
+		if (fog_player >= 0) draw_fog(data, indexed_surface->pitch);
 
 		draw_callback(data, indexed_surface->pitch);
 
