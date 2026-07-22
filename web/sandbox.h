@@ -581,12 +581,26 @@ struct play_ui : ui_functions {
 			play_unit_ack(u, u->unit_type->first_yes_sound, u->unit_type->last_yes_sound);
 	}
 
-	void place_pending(int mx, int my) {
-		xy map_pos = screen_to_map(mx, my);
-		int tx = (map_pos.x - pending_build->placement_size.x / 2 + 16) / 32;   // +16 = round to nearest tile
-		int ty = (map_pos.y - pending_build->placement_size.y / 2 + 16) / 32;
+	// The tile a building would be placed at for cursor map position `map_pos`.
+	// Refineries (Assimilator / Refinery / Extractor) must sit exactly on a geyser,
+	// so snap to the geyser under the cursor rather than centering on the cursor.
+	void placement_tile(xy map_pos, int& tx, int& ty) {
+		unit_t* g;
+		if (unit_is_refinery(pending_build) && (g = select_get_unit_at(map_pos)) &&
+		    unit_is(g, UnitTypes::Resource_Vespene_Geyser)) {
+			tx = (g->sprite->position.x - g->unit_type->placement_size.x / 2) / 32;
+			ty = (g->sprite->position.y - g->unit_type->placement_size.y / 2) / 32;
+		} else {
+			tx = (map_pos.x - pending_build->placement_size.x / 2 + 16) / 32;   // +16 = round to nearest tile
+			ty = (map_pos.y - pending_build->placement_size.y / 2 + 16) / 32;
+		}
 		if (tx < 0) tx = 0;
 		if (ty < 0) ty = 0;
+	}
+
+	void place_pending(int mx, int my) {
+		int tx, ty;
+		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
 		action_build(my_player, get_order_type(kit.build_order), pending_build, {(size_t)tx, (size_t)ty});
 		pending_build = nullptr;   // one-shot; re-open the menu to place another
@@ -681,21 +695,6 @@ struct play_ui : ui_functions {
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_callback(data, data_pitch);
 
-		// While targeting, bracket the unit under the cursor so it's clear there's a
-		// target there (red for attack, green otherwise) — like the game's target cursor.
-		if (targeting && mouse_x >= 0) {
-			if (place_ok_color < 0) {
-				place_ok_color = nearest_palette_color(40, 240, 40);
-				place_bad_color = nearest_palette_color(240, 40, 40);
-			}
-			if (unit_t* t = select_get_unit_at(screen_to_map(mouse_x, mouse_y))) {
-				int cx = t->sprite->position.x - screen_pos.x, cy = t->sprite->position.y - screen_pos.y;
-				int hw = (int)t->sprite->width / 2 + 3, hh = (int)t->sprite->height / 2 + 3;
-				uint8_t col = (uint8_t)(pending_targ == T_ATTACK ? place_bad_color : place_ok_color);
-				line_rectangle(data, data_pitch, {{cx - hw, cy - hh}, {cx + hw, cy + hh}}, col);
-			}
-		}
-
 		if (!pending_build) return;
 		if (place_ok_color < 0) {
 			place_ok_color = nearest_palette_color(40, 240, 40);
@@ -704,9 +703,8 @@ struct play_ui : ui_functions {
 		if (ghost_ok.empty()) build_ghost_luts();
 
 		int w = pending_build->placement_size.x, h = pending_build->placement_size.y;
-		xy map_pos = screen_to_map(mouse_x, mouse_y);
-		int tx = (map_pos.x - w / 2 + 16) / 32; if (tx < 0) tx = 0;   // +16 = round to nearest tile
-		int ty = (map_pos.y - h / 2 + 16) / 32; if (ty < 0) ty = 0;
+		int tx, ty;
+		placement_tile(screen_to_map(mouse_x, mouse_y), tx, ty);   // snaps refineries to the geyser
 		xy center(32 * tx + w / 2, 32 * ty + h / 2);   // building's map position
 		unit_t* builder = primary_selected();
 		bool ok = builder && can_place_building(builder, my_player, pending_build, center, false, false);
