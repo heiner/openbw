@@ -41,6 +41,9 @@ jobs:
           if compgen -G "web/maps/*.scx" > /dev/null; then
             mkdir -p _site/maps && cp web/maps/*.scx _site/maps/
           fi
+          # Stamp the commit SHA into the cache-buster placeholders so a new deploy
+          # serves fresh openbw.js / openbw.wasm instead of stale cached copies.
+          sed -i "s/__BUILD__/${GITHUB_SHA::12}/g" _site/index.html _site/openbw.js
 
       - uses: actions/upload-pages-artifact@v3
         with:

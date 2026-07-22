@@ -7,6 +7,9 @@
 //   * step the sim on a fixed timer and render on requestAnimationFrame,
 //     blitting the framebuffer to a <canvas>; forward input to the wasm exports.
 
+// Build id — CI replaces the placeholder with the commit SHA for cache-busting.
+const BUILD = '__BUILD__';
+
 // Archive index mapping must match web/wasm_main.cpp's js_file_reader:
 //   0 StarDat  1 BrooDat  2 Patch_rt  3 map
 const ARCHIVE_BASE =
@@ -334,8 +337,11 @@ async function boot(race) {
   // wasm caching so rebuilds are picked up. In production we want the opposite:
   // let the browser cache and reuse the compiled module across visits.
   const DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  // BUILD is replaced by CI with the commit SHA (see .github/workflows/pages.yml), so a
+  // new deploy fetches a fresh wasm URL instead of a stale cached one. Locally it stays
+  // the '__BUILD__' placeholder and we cache-bust per load instead.
   const wasmReq = () => DEV ? fetch('./openbw.wasm?t=' + Date.now(), { cache: 'no-store' })
-                            : fetch('./openbw.wasm');
+                            : fetch('./openbw.wasm?v=' + BUILD);
   let instance;
   try {
     ({ instance } = await WebAssembly.instantiateStreaming(wasmReq(), imports));
@@ -538,6 +544,10 @@ async function boot(race) {
 // Let the user pick a race (also satisfies the "user gesture" some browsers want).
 $('controls').style.display = 'block';
 setMsg('Choose a race to begin.');
+// Warn on mobile: no touch controls yet, and the first run pulls ~90 MB.
+if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
+    (window.matchMedia && matchMedia('(pointer: coarse)').matches))
+  $('mobilewarn').style.display = 'block';
 for (const b of document.querySelectorAll('#controls button')) {
   b.addEventListener('click', () => {
     $('controls').style.display = 'none';

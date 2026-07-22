@@ -818,9 +818,16 @@ struct ui_functions: ui_util_functions {
 		int gw = (int)(tb.to.x - tb.from.x) + 3;
 		int gh = (int)(tb.to.y - tb.from.y) + 3;
 		fog_level_grid.resize((size_t)gw * gh);
+		int mw = (int)game_st.map_tile_width, mh = (int)game_st.map_tile_height;
 		for (int gy = 0; gy != gh; ++gy)
-			for (int gx = 0; gx != gw; ++gx)
-				fog_level_grid[(size_t)gy * gw + gx] = (uint8_t)fog_tile_level(base_tx + gx, base_ty + gy, mask);
+			for (int gx = 0; gx != gw; ++gx) {
+				// Clamp samples to the map edge, so tiles beyond the map (which read as
+				// unexplored/black) don't darken the real edge terrain via the blur/lerp.
+				int tx = base_tx + gx, ty = base_ty + gy;
+				tx = tx < 0 ? 0 : tx >= mw ? mw - 1 : tx;
+				ty = ty < 0 ? 0 : ty >= mh ? mh - 1 : ty;
+				fog_level_grid[(size_t)gy * gw + gx] = (uint8_t)fog_tile_level(tx, ty, mask);
+			}
 
 		// Soften the per-tile levels with a small separable box blur before interpolating,
 		// so the vision boundary is a smooth curve instead of tracing the 32px tile grid
