@@ -109,6 +109,12 @@ OPENBW_EXPORT(openbw_resize) void openbw_resize(int width, int height) {
 	g_ui->resize(width, height);
 }
 
+// Nudge the camera by (dx, dy) map pixels (e.g. from a trackpad/wheel scroll).
+// ui.update() clamps screen_pos to the map each frame.
+OPENBW_EXPORT(openbw_pan) void openbw_pan(int dx, int dy) {
+	if (g_ui) g_ui->screen_pos += xy(dx, dy);
+}
+
 // One simulation frame. JS drives this from a fixed-interval timer, so it keeps
 // ticking (throttled) while the tab is backgrounded and never fast-forwards a
 // backlog on return — unlike advancing by elapsed wall-clock time.
@@ -121,3 +127,39 @@ OPENBW_EXPORT(openbw_step) void openbw_step() {
 OPENBW_EXPORT(openbw_render) void openbw_render() {
 	if (g_ui) g_ui->update();
 }
+
+// The current command card as "title\nKEY\tLabel\tEN\n…" — the JS host renders it.
+OPENBW_EXPORT(openbw_card) const char* openbw_card() {
+	return g_ui ? g_ui->card_text.c_str() : "";
+}
+
+// Producer status "<progress%>\t<name>…" (empty if not training) — rebuilt per call.
+OPENBW_EXPORT(openbw_status) const char* openbw_status() {
+	return g_ui ? g_ui->build_status() : "";
+}
+
+// "minerals\tgas\tsupply_used\tsupply_max" for the resource HUD.
+OPENBW_EXPORT(openbw_resources) const char* openbw_resources() {
+	return g_ui ? g_ui->resources() : "";
+}
+
+// Pointer mode so JS can pick a cursor: 0 normal, 1 targeting, 2 placing.
+OPENBW_EXPORT(openbw_cursor) int openbw_cursor() {
+	return g_ui ? g_ui->cursor() : 0;
+}
+
+// Render a command-button icon (frame == unit id) to RGBA; returns a pointer into
+// wasm memory valid until the next call, with the size in openbw_icon_w/h.
+OPENBW_EXPORT(openbw_icon) const uint8_t* openbw_icon(int frame) {
+	return g_ui ? g_ui->render_icon(frame) : nullptr;
+}
+OPENBW_EXPORT(openbw_icon_w) int openbw_icon_w() { return g_ui ? g_ui->icon_w : 0; }
+OPENBW_EXPORT(openbw_icon_h) int openbw_icon_h() { return g_ui ? g_ui->icon_h : 0; }
+
+// Resource-HUD icon (0 = minerals, 1 = gas) to RGBA; same size convention as openbw_icon.
+OPENBW_EXPORT(openbw_res_icon) const uint8_t* openbw_res_icon(int which) {
+	return g_ui ? g_ui->render_res_icon(which) : nullptr;
+}
+
+// Edge-scroll direction for the cursor: 0 none, 1 N, 2 NE, 3 E, 4 SE, 5 S, 6 SW, 7 W, 8 NW.
+OPENBW_EXPORT(openbw_edge) int openbw_edge() { return g_ui ? g_ui->edge_dir : 0; }

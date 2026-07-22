@@ -4,6 +4,7 @@ openbw_play
 *.dSYM/
 build.err
 build.log
+__pycache__/
 
 # downloaded game assets (copyrighted — fetched locally for dev only; the
 # browser build fetches these client-side)

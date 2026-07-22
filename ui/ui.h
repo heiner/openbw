@@ -31,6 +31,7 @@ struct tileset_image_data {
 	std::array<pcx_image, 7> light_pcx;
 	grp_t creep_grp;
 	int resource_minimap_color;
+	int minimap_border_color;
 	std::array<uint8_t, 256> cloak_fade_selector;
 };
 
@@ -261,6 +262,7 @@ void load_tileset_image_data(tileset_image_data& img, size_t tileset_index, load
 		return best_index;
 	};
 	img.resource_minimap_color = get_nearest_color(0, 255, 255);
+	img.minimap_border_color = get_nearest_color(110, 110, 110);   // subdued gray frame around the minimap
 
 	for (size_t i = 0; i != 256; ++i) {
 		int r = img.wpe[4 * i + 0];
@@ -563,11 +565,17 @@ struct ui_functions: ui_util_functions {
 	int fog_player = -1;
 	int fog_level = 16;   // dark.pcx darkness row for explored-but-not-visible
 	a_vector<uint8_t> fog_level_grid;   // per-frame scratch for the fog overlay
+	a_vector<uint8_t> fog_blur_grid;    // scratch for the fog-level blur pass
+	int fog_blur_radius = 2;            // tiles; softens the vision boundary (0 = off)
 
 	// Live-play input hook: a subclass may intercept input events (e.g. to issue
 	// unit commands) before the default replay-viewer handling. Returning true
 	// consumes the event. Default: no-op, so the replay viewer is unchanged.
 	virtual bool handle_game_input(const native_window::event_t&) { return false; }
+
+	// Fires after a left-click selection completes (even a same-unit re-click);
+	// a subclass may use it to play selection acks. Default: no-op.
+	virtual void on_selection(bool double_clicked) { (void)double_clicked; }
 
 	bool exit_on_close = true;
 	bool window_closed = false;
@@ -813,6 +821,37 @@ struct ui_functions: ui_util_functions {
 		for (int gy = 0; gy != gh; ++gy)
 			for (int gx = 0; gx != gw; ++gx)
 				fog_level_grid[(size_t)gy * gw + gx] = (uint8_t)fog_tile_level(base_tx + gx, base_ty + gy, mask);
+
+		// Soften the per-tile levels with a small separable box blur before interpolating,
+		// so the vision boundary is a smooth curve instead of tracing the 32px tile grid
+		// (hides the "block structure"). Uniform interior regions are left unchanged, so
+		// only boundaries feather. Clamped at the grid edge (a tile off-screen).
+		if (int R = fog_blur_radius) {
+			fog_blur_grid.resize((size_t)gw * gh);
+			int win = 2 * R + 1;
+			for (int gy = 0; gy != gh; ++gy) {   // horizontal pass -> fog_blur_grid
+				const uint8_t* src = &fog_level_grid[(size_t)gy * gw];
+				uint8_t* dst = &fog_blur_grid[(size_t)gy * gw];
+				for (int gx = 0; gx != gw; ++gx) {
+					int s = 0;
+					for (int dx = -R; dx <= R; ++dx) {
+						int xx = gx + dx; if (xx < 0) xx = 0; else if (xx >= gw) xx = gw - 1;
+						s += src[xx];
+					}
+					dst[gx] = (uint8_t)(s / win);
+				}
+			}
+			for (int gx = 0; gx != gw; ++gx) {   // vertical pass -> fog_level_grid
+				for (int gy = 0; gy != gh; ++gy) {
+					int s = 0;
+					for (int dy = -R; dy <= R; ++dy) {
+						int yy = gy + dy; if (yy < 0) yy = 0; else if (yy >= gh) yy = gh - 1;
+						s += fog_blur_grid[(size_t)yy * gw + gx];
+					}
+					fog_level_grid[(size_t)gy * gw + gx] = (uint8_t)(s / win);
+				}
+			}
+		}
 
 		for (int sy = 0; sy != (int)screen_height; ++sy) {
 			int my = screen_pos.y + sy - 16;               // tile centers sit at +16
@@ -1423,7 +1462,7 @@ struct ui_functions: ui_util_functions {
 		if (minimap_width != game_st.map_tile_width) return;
 		if (minimap_height != game_st.map_tile_height) return;
 		fill_rectangle(data, data_pitch, area, 0);
-		line_rectangle(data, data_pitch, {area.from - xy(1, 1), area.to + xy(1, 1)}, 0);
+		line_rectangle(data, data_pitch, {area.from - xy(1, 1), area.to + xy(1, 1)}, (uint8_t)tileset_img.minimap_border_color);
 
 		uint8_t* p = data + data_pitch * (size_t)area.from.y + (size_t)area.from.x;
 
@@ -1881,6 +1920,7 @@ struct ui_functions: ui_util_functions {
 				}
 			}
 			is_drag_selecting = false;
+			on_selection(double_clicked);
 		};
 
 		if (wnd) {

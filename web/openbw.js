@@ -154,6 +154,7 @@ function makeWasi(getMemory) {
 // Input mapping (browser -> SDL-style codes the engine expects)
 // ---------------------------------------------------------------------------
 const SCANCODE = {
+  Escape: 41,
   ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82,
   ControlLeft: 224, ShiftLeft: 225, ControlRight: 228, ShiftRight: 229,
 };
@@ -166,36 +167,145 @@ function wireInput(canvas, x) {
   };
   const sdlButton = (b) => (b === 0 ? 1 : b === 1 ? 2 : b === 2 ? 3 : 0);
 
+  // Reflect a mouse event's modifier flags into the engine's key-state, which is
+  // authoritative at click time. On macOS this lets Cmd (meta) stand in for Ctrl
+  // for select-all-of-type — there Ctrl+click is hijacked by the OS as a right-click.
+  const syncMods = (e) => {
+    x.openbw_key(e.ctrlKey || e.metaKey ? 1 : 0, 0, 224);   // virtual Ctrl
+    x.openbw_key(e.shiftKey ? 1 : 0, 0, 225);               // virtual Shift
+  };
+
   canvas.addEventListener('mousemove', (e) => { const [px, py] = xy(e); x.openbw_mouse_move(px, py); });
+  // Park the cursor off-screen when it leaves the canvas so edge-scrolling stops.
+  canvas.addEventListener('mouseleave', () => x.openbw_mouse_move(-1, -1));
   canvas.addEventListener('mousedown', (e) => {
-    const [px, py] = xy(e); x.openbw_mouse_button(1, sdlButton(e.button), px, py, e.detail || 1);
+    syncMods(e); const [px, py] = xy(e); x.openbw_mouse_button(1, sdlButton(e.button), px, py, e.detail || 1);
   });
   window.addEventListener('mouseup', (e) => {
-    const [px, py] = xy(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
+    syncMods(e); const [px, py] = xy(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  // Forward keys to the engine without shadowing the browser's own shortcuts.
+  // The game only binds unmodified keys plus Ctrl+digit (control groups); anything
+  // held with Cmd (meta) or Alt — Cmd+1 to switch tabs, Cmd+R to reload, … — is
+  // left for the browser. The modifier keys themselves are always forwarded so the
+  // engine can track held state (for select-all, shift-queue, group assign).
+  const MOD_SC = new Set([224, 225, 228, 229]);
   const key = (down) => (e) => {
     const sc = SCANCODE[e.code] || 0;
     const sym = e.key.length === 1 ? e.key.toLowerCase().charCodeAt(0) : 0;
-    if (sc || sym) { x.openbw_key(down ? 1 : 0, sym, sc); e.preventDefault(); }
+    if (!sc && !sym) return;
+    if (MOD_SC.has(sc)) { x.openbw_key(down ? 1 : 0, 0, sc); return; }   // track, don't preventDefault
+    const isDigit = sym >= 48 && sym <= 57;
+    const gameBinds = (!e.metaKey && !e.altKey && !e.ctrlKey)          // unmodified keys
+                   || (e.ctrlKey && !e.metaKey && !e.altKey && isDigit); // Ctrl+digit = control groups
+    if (!gameBinds) return;   // hand Cmd+1, Cmd+R, Ctrl+T, … back to the browser
+    x.openbw_key(down ? 1 : 0, sym, sc);
+    e.preventDefault();
   };
   window.addEventListener('keydown', key(true));
   window.addEventListener('keyup', key(false));
+
+  // Trackpad / wheel scrolling pans the camera.
+  canvas.addEventListener('wheel', (e) => {
+    e.preventDefault();
+    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
+    x.openbw_pan(Math.round(e.deltaX * scale), Math.round(e.deltaY * scale));
+  }, { passive: false });
 }
 
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
 async function boot(race) {
+  // Create the audio context now — inside the race-button click gesture — so the
+  // browser's autoplay policy doesn't leave it suspended; resume on later input too.
+  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  const resumeAudio = () => audioCtx.resume();
+  addEventListener('pointerdown', resumeAudio);
+  addEventListener('keydown', resumeAudio);
+
+  // Master gain node: every sound routes through it, so muting is a single knob.
+  const masterGain = audioCtx.createGain();
+  masterGain.connect(audioCtx.destination);
+  const muteBtn = $('mute');
+  let muted = false;
+  try { muted = localStorage.getItem('openbw-muted') === '1'; } catch {}
+  const applyMute = () => {
+    masterGain.gain.value = muted ? 0 : 1;
+    muteBtn.textContent = muted ? '🔇' : '🔊';
+    muteBtn.title = muted ? 'Unmute sound' : 'Mute sound';
+  };
+  muteBtn.style.display = 'block';
+  muteBtn.onclick = () => {
+    muted = !muted;
+    try { localStorage.setItem('openbw-muted', muted ? '1' : '0'); } catch {}
+    applyMute();
+    resumeAudio();
+  };
+  applyMute();
+
   const assets = await loadAssets();
 
   let memory;
   const getMemory = () => memory;
+
+  // Web Audio bridge for native_sound (web/wasm_backend.cpp): decode WAV bytes
+  // to AudioBuffers keyed by id, then play/stop them per channel. pan is always
+  // 0 from the engine, so we don't bother panning.
+  const soundBuffers = [];   // id -> AudioBuffer | null while decoding
+  const soundChannels = [];  // channel -> { source, gain, playing }
+  const pendingPlay = {};    // id -> {channel, volume} requested before decode finished
+  const gainFor = (v) => Math.min(1, Math.max(0, v / 128));
+  const playBuffer = (buf, channel, volume) => {
+    const prev = soundChannels[channel];
+    if (prev && prev.source) { try { prev.source.stop(); } catch {} }
+    const source = audioCtx.createBufferSource();
+    source.buffer = buf;
+    const gain = audioCtx.createGain();
+    gain.gain.value = gainFor(volume);
+    source.connect(gain).connect(masterGain);
+    const rec = { source, gain, playing: true };
+    source.onended = () => { if (soundChannels[channel] === rec) rec.playing = false; };
+    soundChannels[channel] = rec;
+    source.start();
+  };
+  const audio = {
+    js_sound_load(ptr, size) {
+      const id = soundBuffers.length;
+      soundBuffers.push(null);
+      const wav = new Uint8Array(memory.buffer, ptr, size).slice();   // copy out of wasm memory
+      audioCtx.decodeAudioData(wav.buffer).then((b) => {
+        soundBuffers[id] = b;
+        // A play requested while still decoding would be silently dropped
+        // (a one-shot sound like a selection ack) — fire it now that it's ready.
+        const p = pendingPlay[id];
+        if (p) { delete pendingPlay[id]; playBuffer(b, p.channel, p.volume); }
+      }, () => {});
+      return id;
+    },
+    js_sound_play(id, channel, volume) {
+      if (id < 0) return;
+      if (soundBuffers[id]) playBuffer(soundBuffers[id], channel, volume);
+      else pendingPlay[id] = { channel, volume };   // decode still in flight
+    },
+    js_sound_is_playing: (channel) => (soundChannels[channel] && soundChannels[channel].playing ? 1 : 0),
+    js_sound_stop(channel) {
+      const c = soundChannels[channel];
+      if (c && c.source) { try { c.source.stop(); } catch {} c.playing = false; }
+    },
+    js_sound_set_volume(channel, volume) {
+      const c = soundChannels[channel];
+      if (c) c.gain.gain.value = gainFor(volume);
+    },
+  };
+
   const env = {
     js_file_size: (index) => assets[index].length,
     js_read_data: (index, dst, offset, n) => {
       new Uint8Array(memory.buffer).set(assets[index].subarray(offset, offset + n), dst);
     },
+    ...audio,
   };
 
   setMsg('Starting engine…');
@@ -242,7 +352,140 @@ async function boot(race) {
   // render then.
   setInterval(() => x.openbw_step(), 42);   // ~24 Hz "fastest" game speed
 
+  // Command card overlay: openbw_card() returns "title\nKEY\tLabel\n…".
+  const cardEl = $('card');
+  const dec = new TextDecoder();
+  let lastCard = '';
+  const readCString = (ptr) => {
+    const mem = new Uint8Array(memory.buffer);
+    let end = ptr; while (mem[end]) end++;
+    return dec.decode(mem.subarray(ptr, end));
+  };
+  // Render a unit's sprite icon (by unit id) to a cached data URL. The engine hands
+  // back RGBA pixels in wasm memory valid only until the next openbw_icon call, so we
+  // copy them into a canvas immediately and memoize the resulting data URL by id.
+  const iconCache = new Map();
+  const iconCanvas = document.createElement('canvas');
+  const ictx = iconCanvas.getContext('2d');
+  const iconURL = (id) => {
+    if (iconCache.has(id)) return iconCache.get(id);
+    const ptr = x.openbw_icon(id), w = x.openbw_icon_w(), h = x.openbw_icon_h();
+    let url = '';
+    if (ptr && w && h) {
+      iconCanvas.width = w; iconCanvas.height = h;
+      const img = ictx.createImageData(w, h);
+      img.data.set(new Uint8Array(memory.buffer, ptr, w * h * 4));
+      ictx.putImageData(img, 0, 0);
+      url = iconCanvas.toDataURL();
+    }
+    iconCache.set(id, url);
+    return url;
+  };
+
+  const updateCard = () => {
+    const ptr = x.openbw_card();
+    const text = ptr ? readCString(ptr) : '';
+    if (text === lastCard) return;
+    lastCard = text;
+    if (!text) { cardEl.innerHTML = ''; return; }
+    const lines = text.split('\n');
+    let html = `<span class="title">${lines[0]}</span>`;
+    for (let i = 1; i < lines.length; i++) {
+      const f = lines[i].split('\t');   // KEY, Label, enabled(1/0), iconUnitId(-1 = none)
+      if (f.length < 2) continue;
+      const off = f[2] === '0' ? ' off' : '';
+      const id = f.length > 3 ? parseInt(f[3], 10) : -1;
+      const url = id >= 0 ? iconURL(id) : '';
+      const ico = url ? `<img class="ico" src="${url}">` : '';
+      // Highlight the hotkey letter inside the label (first match — usually the first
+      // letter, else an inner letter like "Medi[c]"). Fall back to a badge if absent.
+      const key = f[0].toLowerCase(), label = f[1];
+      const k = label.toLowerCase().indexOf(key);
+      const labelHtml = k >= 0
+        ? `${label.slice(0, k)}<b>${label[k]}</b>${label.slice(k + 1)}`
+        : `<b>${f[0].toUpperCase()}</b> ${label}`;
+      // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
+      // the label — not the highlighted <b> from the rest of the word ("B uild").
+      html += `<span class="cmd${off}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span></span>`;
+    }
+    cardEl.innerHTML = html;
+  };
+
+  // Clicking a card button does the same as pressing its key (shift-click queues).
+  cardEl.addEventListener('click', (e) => {
+    const cmd = e.target.closest('.cmd');
+    if (!cmd || cmd.classList.contains('off')) return;
+    const key = cmd.dataset.key;
+    if (!key) return;
+    x.openbw_key(e.shiftKey ? 1 : 0, 0, 225);   // reflect shift for queuing
+    const sym = key.charCodeAt(0);
+    x.openbw_key(1, sym, 0); x.openbw_key(0, sym, 0);   // frame loop processes it
+  });
+
+  // Producer status: "<progress%>\t<name(training)>\t<queued>…"
+  const statusEl = $('status');
+  let lastStatus = '';
+  const updateStatus = () => {
+    const ptr = x.openbw_status();
+    const text = ptr ? readCString(ptr) : '';
+    if (text === lastStatus) return;
+    lastStatus = text;
+    if (!text) { statusEl.innerHTML = ''; return; }
+    const p = text.split('\t');
+    const prog = Math.max(0, Math.min(100, parseInt(p[0], 10) || 0));
+    let html = `<span class="bar"><i style="width:${prog}%"></i></span>`;
+    for (let i = 1; i < p.length; i++) html += `<span class="q${i === 1 ? ' cur' : ''}">${p[i]}</span>`;
+    statusEl.innerHTML = html;
+  };
+
+  // Resource HUD: "minerals\tgas\tsupply_used\tsupply_max".
+  const resEl = $('resources');
+  let lastRes = '';
+  // The mineral/gas icons are the sprites a worker carries when delivering — a blue
+  // mineral chunk and a green gas container (per race). They never change, so build
+  // the data URLs once (after the game is up, so the palette is loaded).
+  const resIconURL = (which) => {
+    const ptr = x.openbw_res_icon(which), w = x.openbw_icon_w(), h = x.openbw_icon_h();
+    if (!ptr || !w || !h) return '';
+    iconCanvas.width = w; iconCanvas.height = h;
+    const img = ictx.createImageData(w, h);
+    img.data.set(new Uint8Array(memory.buffer, ptr, w * h * 4));
+    ictx.putImageData(img, 0, 0);
+    return iconCanvas.toDataURL();
+  };
+  let resIcons = null;
+  const updateResources = () => {
+    const ptr = x.openbw_resources();
+    const text = ptr ? readCString(ptr) : '';
+    if (text === lastRes) return;
+    lastRes = text;
+    if (!text) { resEl.innerHTML = ''; return; }
+    if (!resIcons) resIcons = [resIconURL(0), resIconURL(1), resIconURL(2)];
+    const [min, gas, used, max] = text.split('\t');
+    const cap = (+used >= +max) ? ' cap' : '';
+    const ico = (u, cls) => u ? `<img class="rico" src="${u}">` : `<span class="dot ${cls}"></span>`;
+    resEl.innerHTML =
+      `<span class="r min">${ico(resIcons[0], 'min')}${min}</span>` +
+      `<span class="r gas">${ico(resIcons[1], 'gas')}${gas}</span>` +
+      `<span class="r sup">${ico(resIcons[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
+  };
+
   let iw = 0, ih = 0, image = null;
+  // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
+  // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
+  // 1 targeting, 2 placing).
+  const EDGE_CURSOR = ['', 'n-resize', 'ne-resize', 'e-resize', 'se-resize',
+                       's-resize', 'sw-resize', 'w-resize', 'nw-resize'];
+  let lastCursor = '';
+  const updateCursor = () => {
+    const edge = x.openbw_edge();
+    const cur = edge ? EDGE_CURSOR[edge]
+      : (m => m === 1 ? 'crosshair' : m === 2 ? 'cell' : 'default')(x.openbw_cursor());
+    if (cur === lastCursor) return;
+    lastCursor = cur;
+    canvas.style.cursor = cur;
+  };
+
   function frame() {
     x.openbw_render();
     const w = x.openbw_framebuffer_width(), h = x.openbw_framebuffer_height(), ptr = x.openbw_framebuffer();
@@ -251,6 +494,10 @@ async function boot(race) {
       image.data.set(new Uint8Array(memory.buffer, ptr, w * h * 4));
       ctx.putImageData(image, 0, 0);
     }
+    updateCard();
+    updateStatus();
+    updateResources();
+    updateCursor();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

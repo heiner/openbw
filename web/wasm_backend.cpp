@@ -279,18 +279,42 @@ std::unique_ptr<surface> load_image(const void*, size_t) { return nullptr; }
 }  // namespace native_window_drawing
 
 // ---------------------------------------------------------------------------
-// native_sound — stubs (no audio in the browser build for now)
+// native_sound — bridged to the JS host's Web Audio (see openbw.js).
+// The engine loads WAV bytes from the MPQs and hands them to load_wav; JS
+// decodes them to AudioBuffers (by id) and plays/stops them per channel.
 // ---------------------------------------------------------------------------
+extern "C" {
+__attribute__((import_module("env"), import_name("js_sound_load")))
+int js_sound_load(const void* data, unsigned size);              // -> sound id
+__attribute__((import_module("env"), import_name("js_sound_play")))
+void js_sound_play(int id, int channel, int volume, int pan);
+__attribute__((import_module("env"), import_name("js_sound_is_playing")))
+int js_sound_is_playing(int channel);
+__attribute__((import_module("env"), import_name("js_sound_stop")))
+void js_sound_stop(int channel);
+__attribute__((import_module("env"), import_name("js_sound_set_volume")))
+void js_sound_set_volume(int channel, int volume);
+}
+
 namespace native_sound {
 
 int frequency = 0;
 int channels = 8;
 
+struct wasm_sound : sound {
+	int id;
+	explicit wasm_sound(int id) : id(id) {}
+};
+
 void init() {}
-void play(int, sound*, int, int) {}
-bool is_playing(int) { return false; }
-void stop(int) {}
-void set_volume(int, int) {}
-std::unique_ptr<sound> load_wav(const void*, size_t) { return nullptr; }
+void play(int channel, sound* s, int volume, int pan) {
+	js_sound_play(s ? ((wasm_sound*)s)->id : -1, channel, volume, pan);
+}
+bool is_playing(int channel) { return js_sound_is_playing(channel) != 0; }
+void stop(int channel) { js_sound_stop(channel); }
+void set_volume(int channel, int volume) { js_sound_set_volume(channel, volume); }
+std::unique_ptr<sound> load_wav(const void* data, size_t size) {
+	return std::unique_ptr<sound>(new wasm_sound(js_sound_load(data, (unsigned)size)));
+}
 
 }  // namespace native_sound

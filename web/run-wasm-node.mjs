@@ -26,6 +26,9 @@ const env = {
     const mem = new Uint8Array(memory.buffer);
     mem.set(files[index].subarray(offset, offset + n), dst);
   },
+  // no audio in headless Node — stubs so instantiation doesn't fail
+  js_sound_load: () => -1, js_sound_play: () => {}, js_sound_is_playing: () => 0,
+  js_sound_stop: () => {}, js_sound_set_volume: () => {},
 };
 
 const module = await WebAssembly.compile(readFileSync('web/openbw.wasm'));

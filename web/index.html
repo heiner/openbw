@@ -9,7 +9,7 @@
     font: 14px/1.5 system-ui, sans-serif; overflow: hidden; }
   #wrap { position: fixed; inset: 0; }
   #screen { image-rendering: pixelated; display: block; width: 100vw; height: 100vh;
-    background: #111; cursor: crosshair; }
+    background: #111; cursor: default; }
   #overlay { position: fixed; inset: 0; display: grid; place-items: center;
     background: rgba(0,0,0,.85); text-align: center; z-index: 10; }
   #overlay .card { max-width: 560px; padding: 24px 28px; }
@@ -22,10 +22,52 @@
   button { font: inherit; color:#0b1220; background:#38bdf8; border:0; border-radius:6px;
     padding:8px 16px; cursor:pointer; margin-top:8px; }
   a { color:#38bdf8; }
+  #card { position: fixed; right: 8px; bottom: 8px; display: flex; gap: 6px; align-items: center;
+    flex-wrap: wrap; justify-content: flex-end; max-width: 70vw; padding: 6px 10px; border-radius: 8px;
+    background: rgba(0,0,0,.5); font: 13px system-ui, sans-serif; color: #cbd5e1; pointer-events: none; }
+  #card:empty { display: none; }
+  #card .title { font-weight: 700; color: #e2e8f0; margin-right: 4px; }
+  #card .cmd { display: inline-flex; align-items: center; gap: 4px; background: rgba(30,41,59,.9);
+    border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+    pointer-events: auto; cursor: pointer; user-select: none; }
+  #card .cmd:not(.off):hover { background: rgba(51,65,85,.95); }
+  #card .cmd.off { cursor: default; }
+  #card .cmd .ico { width: 22px; height: 22px; object-fit: contain; image-rendering: pixelated; }
+  #card .cmd.off .ico { filter: grayscale(1) brightness(.6); }
+  #card .cmd b { color: #38bdf8; }
+  #card .cmd.off { opacity: .38; }
+  #card .cmd.off b { color: #64748b; }
+  #status { position: fixed; right: 8px; bottom: 46px; display: flex; gap: 6px; align-items: center;
+    justify-content: flex-end; padding: 5px 10px; border-radius: 8px; background: rgba(0,0,0,.5);
+    color: #cbd5e1; font: 13px system-ui, sans-serif; pointer-events: none; }
+  #status:empty { display: none; }
+  #status .bar { width: 90px; height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; }
+  #status .bar > i { display: block; height: 100%; background: #38bdf8; }
+  #status .q { background: rgba(30,41,59,.9); border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
+  #status .q.cur { color: #e2e8f0; font-weight: 600; }
+  #resources { position: fixed; top: 8px; right: 12px; display: flex; gap: 16px; align-items: center;
+    padding: 5px 12px; border-radius: 8px; background: rgba(0,0,0,.5);
+    font: 600 14px system-ui, sans-serif; color: #e2e8f0; pointer-events: none; }
+  #resources:empty { display: none; }
+  #resources .r { display: flex; gap: 5px; align-items: center; }
+  #resources .rico { height: 22px; width: auto; max-width: 26px; image-rendering: pixelated; }
+  #resources .dot { width: 9px; height: 9px; border-radius: 50%; }
+  #resources .min .dot { background: #6cb8ff; }
+  #resources .gas .dot { background: #4ade80; }
+  #resources .sup .dot { background: #cbd5e1; }
+  #resources .cap { color: #f87171; }
+  #mute { position: fixed; top: 8px; left: 12px; z-index: 5; display: none;
+    width: 34px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
+    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px; cursor: pointer; }
+  #mute:hover { background: rgba(0,0,0,.72); }
 </style>
 </head>
 <body>
 <div id="wrap"><canvas id="screen" width="1280" height="800"></canvas></div>
+<div id="resources"></div>
+<button id="mute" title="Mute sound">🔊</button>
+<div id="status"></div>
+<div id="card"></div>
 
 <div id="overlay"><div class="card">
   <h1>OpenBW</h1>
