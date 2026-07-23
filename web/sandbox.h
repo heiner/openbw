@@ -499,8 +499,10 @@ struct play_ui : ui_functions {
 			} else {
 				// A Zerg egg / morphing unit counts down its own remaining_build_time
 				// toward the queued unit's build time (no separate current_build_unit).
+				// Right after queueing, a producer sits here for a frame with
+				// remaining_build_time still 0 — show 0%, not a full bar, until it starts.
 				int bt = u->build_queue.front()->build_time;
-				prog = pct(bt - u->remaining_build_time, bt);
+				prog = u->remaining_build_time > 0 ? pct(bt - u->remaining_build_time, bt) : 0;
 			}
 			status_text += format("%d", prog);
 			for (auto* ut : u->build_queue) { status_text += '\t'; status_text += unit_name(ut->id); }
