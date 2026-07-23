@@ -248,7 +248,7 @@ struct play_ui : ui_functions {
 	targ_t pending_targ = T_ATTACK;
 
 	enum cmd_act { C_MOVE, C_STOP, C_ATTACK, C_GATHER, C_HOLD, C_PATROL,
-	               C_BUILDMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
+	               C_BUILDMENU, C_ADVMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
 	               C_SELECT,     // select the player's units of cmd.ut (SCVs / Probes / Larvae)
 	               C_RALLY, C_RESEARCH, C_UPGRADE,
 	               C_LIFT, C_LAND,      // Terran flying buildings
@@ -558,18 +558,71 @@ struct play_ui : ui_functions {
 		}
 	}
 
-	void add_producible(unit_t* u, bool buildings_only) {
+	// Canonical BW hotkey for building placement and building morphs (Lair, Sunken…).
+	static char bw_build_key(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		// Terran basic
+		case U::Terran_Command_Center: return 'c'; case U::Terran_Supply_Depot: return 's';
+		case U::Terran_Refinery: return 'r'; case U::Terran_Barracks: return 'b';
+		case U::Terran_Engineering_Bay: return 'e'; case U::Terran_Missile_Turret: return 't';
+		case U::Terran_Academy: return 'a'; case U::Terran_Bunker: return 'u';
+		// Terran advanced
+		case U::Terran_Factory: return 'f'; case U::Terran_Starport: return 's';
+		case U::Terran_Science_Facility: return 'i'; case U::Terran_Armory: return 'a';
+		// Protoss basic
+		case U::Protoss_Nexus: return 'n'; case U::Protoss_Pylon: return 'p';
+		case U::Protoss_Assimilator: return 'a'; case U::Protoss_Gateway: return 'g';
+		case U::Protoss_Forge: return 'f'; case U::Protoss_Photon_Cannon: return 'c';
+		case U::Protoss_Cybernetics_Core: return 'y'; case U::Protoss_Shield_Battery: return 'b';
+		// Protoss advanced
+		case U::Protoss_Robotics_Facility: return 'r'; case U::Protoss_Stargate: return 's';
+		case U::Protoss_Citadel_of_Adun: return 'c'; case U::Protoss_Robotics_Support_Bay: return 'b';
+		case U::Protoss_Fleet_Beacon: return 'f'; case U::Protoss_Templar_Archives: return 't';
+		case U::Protoss_Observatory: return 'o'; case U::Protoss_Arbiter_Tribunal: return 'a';
+		// Zerg basic
+		case U::Zerg_Hatchery: return 'h'; case U::Zerg_Creep_Colony: return 'c';
+		case U::Zerg_Extractor: return 'e'; case U::Zerg_Spawning_Pool: return 's';
+		case U::Zerg_Evolution_Chamber: return 'v'; case U::Zerg_Hydralisk_Den: return 'd';
+		// Zerg advanced
+		case U::Zerg_Spire: return 's'; case U::Zerg_Queens_Nest: return 'q';
+		case U::Zerg_Nydus_Canal: return 'n'; case U::Zerg_Ultralisk_Cavern: return 'u';
+		case U::Zerg_Defiler_Mound: return 'd';
+		// Zerg building morphs
+		case U::Zerg_Lair: return 'l'; case U::Zerg_Hive: return 'h';
+		case U::Zerg_Greater_Spire: return 'g'; case U::Zerg_Sunken_Colony: return 'u';
+		case U::Zerg_Spore_Colony: return 's';
+		default: return 0;
+		}
+	}
+	// Whether a structure lives in the worker's Advanced (V) build menu rather than Basic (B).
+	static bool bw_build_advanced(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		case U::Terran_Factory: case U::Terran_Starport: case U::Terran_Science_Facility:
+		case U::Terran_Armory:
+		case U::Protoss_Robotics_Facility: case U::Protoss_Stargate: case U::Protoss_Citadel_of_Adun:
+		case U::Protoss_Robotics_Support_Bay: case U::Protoss_Fleet_Beacon:
+		case U::Protoss_Templar_Archives: case U::Protoss_Observatory: case U::Protoss_Arbiter_Tribunal:
+		case U::Zerg_Spire: case U::Zerg_Queens_Nest: case U::Zerg_Nydus_Canal:
+		case U::Zerg_Ultralisk_Cavern: case U::Zerg_Defiler_Mound: return true;
+		default: return false;
+		}
+	}
+
+	// cat: 0 = no menu filter (a producer's own list); 1 = worker Basic build; 2 = Advanced.
+	void add_producible(unit_t* u, bool buildings_only, int cat = 0) {
 		bool worker = ut_worker(u), building = ut_building(u);
 		for (size_t i = 0; i != game_st.unit_types.vec.size(); ++i) {
 			const unit_type_t* t = get_unit_type((UnitTypes)i);
 			if (!unit_can_build(u, t)) continue;
 			bool tb = ut_building(t);
 			if (buildings_only != tb) continue;
+			if (cat && tb && bw_build_advanced((UnitTypes)i) != (cat == 2)) continue;
 			cmd_act act = worker ? C_BUILD : building ? (tb ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
 			const char* nm = unit_name((UnitTypes)i);
-			// Units get their canonical BW key when it's free on this card; buildings and
-			// any collision fall back to auto-assignment.
-			char k = tb ? 0 : bw_train_key((UnitTypes)i);
+			// Canonical BW key when it's free on this card; otherwise auto-assign.
+			char k = tb ? bw_build_key((UnitTypes)i) : bw_train_key((UnitTypes)i);
 			bool used = false;
 			if (k) for (auto& c : card) if (c.key == k) { used = true; break; }
 			card.push_back({(k && !used) ? k : pick_key(nm), nm, act, (UnitTypes)i});
@@ -599,6 +652,7 @@ struct play_ui : ui_functions {
 			card.push_back({'g', "Gather", C_GATHER, U::None});
 			if (id == U::Terran_SCV) card.push_back({'r', "Repair", C_REPAIR, U::None});
 			card.push_back({'b', "Build", C_BUILDMENU, U::None});
+			card.push_back({'v', "Advanced", C_ADVMENU, U::None});
 		} else {
 			add_producible(u, false);   // train/morph units, upgrades, research
 		}
@@ -667,7 +721,8 @@ struct play_ui : ui_functions {
 		if (!sel) { menu = 0; return; }
 
 		const char* title;
-		if (u && menu == 1) { title = "Build"; add_producible(u, true); }
+		if (u && menu == 1) { title = "Build"; add_producible(u, true, 1); }
+		else if (u && menu == 2) { title = "Advanced Build"; add_producible(u, true, 2); }
 		else if (u) title = card_for_unit(u, u->unit_type->id);
 		else { title = unit_name(sel->unit_type->id); menu = 0; }   // neutral/enemy: name only, no actions
 
@@ -985,6 +1040,7 @@ struct play_ui : ui_functions {
 			case C_STOP:      sync_selection(); cmd_queued(26, key_shift()); break;
 			case C_HOLD:      sync_selection(); cmd_queued(43, key_shift()); break;
 			case C_BUILDMENU: menu = 1; refresh_card(); break;
+			case C_ADVMENU:   menu = 2; refresh_card(); break;
 			case C_BUILD:     pending_build = get_unit_type(c.ut); menu = 0; refresh_card(); break;
 			case C_TRAIN:     sync_selection(); cmd_type(31, c.ut); break;
 			case C_MORPH:     sync_selection(); cmd_type(35, c.ut); break;
