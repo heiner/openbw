@@ -169,6 +169,8 @@ struct bw_cmd {
 	void id8(int op, int v) { begin(op); u8(v); end(); }             // 48 research, 50 upgrade
 	void cancel_slot(int slot) { begin(32); u16(slot); end(); }      // 32 cancel build queue
 	void liftoff(xy pos) { begin(47); u16(pos.x); u16(pos.y); end(); }   // 47 building lift off
+	void unload_all(bool q) { begin(40); u8(q ? 1 : 0); end(); }     // 40 unload all cargo
+	void unload(uint16_t target) { begin(41); u16(target); end(); } // 41 unload one unit
 };
 
 // Apply one player's framed batch, in order, through the engine's action reader.
@@ -241,9 +243,11 @@ struct play_ui : ui_functions {
 	               C_BUILDMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
 	               C_SELECT,     // select the player's units of cmd.ut (SCVs / Probes / Larvae)
 	               C_RALLY, C_RESEARCH, C_UPGRADE,
-	               C_LIFT, C_LAND };   // Terran flying buildings
+	               C_LIFT, C_LAND,      // Terran flying buildings
+	               C_UNLOAD, C_UNLOADALL };   // eject cargo from a bunker / transport
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
-	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None; };
+	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None;
+	               uint16_t unit = 0; };   // target unit id (C_UNLOAD)
 	a_vector<cmd_t> card;
 	a_string card_text;                           // "title\nKEY\tLabel\tEN\n…" for the JS overlay
 	a_string status_text;                         // producer queue + progress, rebuilt per frame
@@ -571,6 +575,18 @@ struct play_ui : ui_functions {
 			card.push_back({'e', "Siege Mode", C_SIEGE, U::None});
 		else if (id == U::Terran_Siege_Tank_Siege_Mode || id == U::Terran_Siege_Tank_Siege_Mode_Turret)
 			card.push_back({'d', "Tank Mode", C_UNSIEGE, U::None});
+		// Cargo: a bunker/transport shows each carried unit (click its icon to eject just
+		// that one) plus an Unload button that ejects everything.
+		if (unit_provides_space(u)) {
+			bool any = false;
+			for (unit_t* c : loaded_units(u)) {
+				card.push_back({pick_key(unit_name(c->unit_type->id)), unit_name(c->unit_type->id),
+				                C_UNLOAD, c->unit_type->id, true, TechTypes::None, UpgradeTypes::None,
+				                get_unit_id(c).raw_value});
+				any = true;
+			}
+			if (any) card.push_back({pick_key("Unload"), "Unload", C_UNLOADALL, U::None});
+		}
 		return unit_name(id);
 	}
 
@@ -910,6 +926,8 @@ struct play_ui : ui_functions {
 			case C_LIFT:      sync_selection(); cmd_liftoff(u_pos_of_selected()); break;
 			case C_LAND:      pending_build = get_unit_type(c.ut != UnitTypes::None ? c.ut : landing_type());
 			                  pending_land = true; menu = 0; refresh_card(); break;
+			case C_UNLOAD:    sync_selection(); cmds.unload(c.unit); break;
+			case C_UNLOADALL: sync_selection(); cmds.unload_all(key_shift()); break;
 			}
 			return true;
 		}

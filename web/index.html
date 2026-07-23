@@ -32,8 +32,12 @@
   button { font: inherit; color:#0b1220; background:#38bdf8; border:0; border-radius:6px;
     padding:8px 16px; cursor:pointer; margin-top:8px; }
   a { color:#38bdf8; }
-  #card { position: fixed; right: 8px; bottom: 8px; display: flex; gap: 6px; align-items: center;
-    flex-wrap: wrap; justify-content: flex-end; max-width: 70vw; padding: 6px 10px; border-radius: 8px;
+  /* Status bar and command card stack in one bottom-right column, so a card that wraps
+     to two lines grows upward and pushes the status bar up instead of hiding under it. */
+  #hud { position: fixed; right: 8px; bottom: 8px; z-index: 4; display: flex; flex-direction: column;
+    align-items: flex-end; gap: 8px; max-width: 72vw; pointer-events: none; }
+  #card { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
+    padding: 6px 10px; border-radius: 8px;
     background: rgba(0,0,0,.5); font: 13px system-ui, sans-serif; color: #cbd5e1; pointer-events: none; }
   #card:empty { display: none; }
   #card .title { font-weight: 700; color: #e2e8f0; margin-right: 4px; }
@@ -60,7 +64,7 @@
   #card .cmd b { color: #38bdf8; }
   #card .cmd.off { opacity: .38; }
   #card .cmd.off b { color: #64748b; }
-  #status { position: fixed; right: 8px; bottom: 46px; display: flex; gap: 6px; align-items: center;
+  #status { display: flex; gap: 6px; align-items: center;
     justify-content: flex-end; padding: 5px 10px; border-radius: 8px; background: rgba(0,0,0,.5);
     color: #cbd5e1; font: 13px system-ui, sans-serif; pointer-events: none; }
   #status:empty { display: none; }
@@ -188,8 +192,7 @@
   <div class="row">Pan with the screen edge, arrow keys, scroll, or the minimap</div>
   <div class="row"><kbd>Esc</kbd> cancels targeting / building placement</div>
 </div>
-<div id="status"></div>
-<div id="card"></div>
+<div id="hud"><div id="status"></div><div id="card"></div></div>
 <div id="toast"></div>
 <div id="paused"><span>Paused</span></div>
 
