@@ -740,10 +740,10 @@ async function boot(session) {
       const w = x.openbw_progress_bar_w(), h = x.openbw_progress_bar_h();
       if (!bp || !w || !h) return;
       if (statusBar.width !== w || statusBar.height !== h) { statusBar.width = w; statusBar.height = h; }
-      barCanvas.width = w; barCanvas.height = h;
-      const img = barCtx.createImageData(w, h);
+      const bctx = statusBar.getContext('2d');
+      const img = bctx.createImageData(w, h);
       img.data.set(new Uint8Array(memory.buffer, bp, w * h * 4));
-      statusBar.getContext('2d').putImageData(img, 0, 0);
+      bctx.putImageData(img, 0, 0);
     }
   };
   // Cancel a queued item (resources refunded). mousedown, not click: acts on the press
