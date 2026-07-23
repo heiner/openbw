@@ -1180,18 +1180,16 @@ struct play_ui : ui_functions {
 		if (dw > w) dw = w;
 		const int h = 5;
 		// Always the "full health" green gradient (production progress doesn't change
-		// colour), notched into little segments by a dark divider every few pixels — the
-		// segmented look of the original bar.
-		const int fill[] = {18, 0, 1, 2, 18};    // green bevel rows
-		const int bg[]   = {18, 15, 16, 17, 18}; // unfilled / divider rows
-		const int SEG = 6;
+		// colour), notched into little segments by a dark divider every few pixels. The
+		// not-yet-filled part is left fully transparent, so the black HUD shows through.
+		const int fill[] = {18, 0, 1, 2, 18};    // green bevel + dark top/bottom border
+		const int SEG = 3;                       // 2px green tick + 1px gap → many small bars
 		pbar_w = w; pbar_h = h;
-		pbar_rgba.assign((size_t)w * h * 4, 0);
+		pbar_rgba.assign((size_t)w * h * 4, 0);   // transparent everywhere by default
 		for (int y = 0; y != h; ++y)
-			for (int x = 0; x != w; ++x) {
+			for (int x = 0; x < dw; ++x) {
 				bool notch = (x % SEG) == SEG - 1;
-				int ci = notch ? 18 : (x < dw ? fill[y] : bg[y]);   // 18 = dark divider
-				int pi = img.hp_bar_colors.at(ci);
+				int pi = img.hp_bar_colors.at(notch ? 18 : fill[y]);   // 18 = dark divider
 				uint8_t* px = &pbar_rgba[((size_t)y * w + x) * 4];
 				px[0] = tileset_img.wpe[4 * pi]; px[1] = tileset_img.wpe[4 * pi + 1];
 				px[2] = tileset_img.wpe[4 * pi + 2]; px[3] = 255;
