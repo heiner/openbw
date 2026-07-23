@@ -118,10 +118,27 @@
   #mp .row { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 8px 0; }
   #mp select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;
     padding: 4px 8px; font: inherit; cursor: pointer; }
-  #mp textarea { width: 100%; box-sizing: border-box; height: 62px; resize: vertical; margin: 6px 0;
-    background: #0b1220; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px;
-    padding: 6px 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; word-break: break-all; }
+  /* The code is never read by a human — a single line with Copy beside it is plenty. */
+  #mp .codeline { display: flex; gap: 6px; align-items: center; margin: 6px 0; }
+  #mp .codeline input { flex: 1 1 auto; min-width: 0; background: #0b1220; color: #cbd5e1;
+    border: 1px solid #334155; border-radius: 6px; padding: 6px 8px;
+    font: 12px ui-monospace, Menlo, monospace; }
+  #mp .codeline button { margin: 0; flex: 0 0 auto; }
   #mp button { margin-top: 0; }
+  /* Lobby laid out like the original: player slots on the left, game info on the right. */
+  #mp .lobby { display: grid; grid-template-columns: 1fr 148px; gap: 12px; margin: 10px 0; }
+  #mp .slots { display: flex; flex-direction: column; gap: 6px; }
+  #mp .slot { display: flex; gap: 8px; align-items: center; padding: 5px 8px;
+    background: rgba(30,41,59,.6); border: 1px solid #334155; border-radius: 6px; }
+  #mp .slot .nm { flex: 1 1 auto; color: #e2e8f0; font-weight: 600; font-size: 13px; }
+  #mp .slot.you .nm { color: #38bdf8; }
+  #mp .slot.open .nm { color: #64748b; font-weight: 400; font-style: italic; }
+  #mp .ginfo { background: rgba(30,41,59,.4); border: 1px solid #334155; border-radius: 6px;
+    padding: 8px 10px; }
+  #mp .ginfo > div { display: flex; justify-content: space-between; gap: 8px; margin: 3px 0;
+    font-size: 12px; }
+  #mp .ginfo label { color: #64748b; }
+  #mp .ginfo span { color: #cbd5e1; }
   #mp .hint { margin: 4px 0; font-size: 12px; color: #64748b; text-align: left; }
   #mp-status { margin-top: 8px; font-size: 12px; color: #94a3b8; min-height: 1.4em; }
   #mp-status.err { color: #f87171; }
@@ -187,13 +204,7 @@
       <h2>or play a friend (1v1)</h2>
       <div class="row">
         <label>Map <select id="mp-map"></select></label>
-        <label>Race
-          <select id="mp-race">
-            <option value="1">Terran</option>
-            <option value="0">Zerg</option>
-            <option value="2">Protoss</option>
-          </select>
-        </label>
+        <label>Race <select id="mp-race"></select></label>
       </div>
       <div class="row" id="mp-setup">
         <button id="mp-host">Host a game</button>
@@ -203,28 +214,45 @@
       <!-- Joiner without a link: the only place anything is pasted in by a joiner. -->
       <div id="mp-step-invite" style="display:none">
         <div class="hint">Paste the invite code your friend sent:</div>
-        <textarea id="mp-in-invite" placeholder="Paste invite code"></textarea>
-        <div class="row"><button id="mp-accept">Continue</button></div>
+        <div class="codeline">
+          <input id="mp-in-invite" type="text" spellcheck="false" placeholder="Paste invite code">
+          <button id="mp-accept">Continue</button>
+        </div>
       </div>
 
       <!-- Host shares the invite; joiner shares the response. Copy-out only. -->
       <div id="mp-step-share" style="display:none">
         <div class="hint" id="mp-share-hint"></div>
-        <textarea id="mp-out" readonly></textarea>
-        <div class="row"><button id="mp-copy">Copy</button></div>
+        <div class="codeline">
+          <input id="mp-out" type="text" spellcheck="false" readonly>
+          <button id="mp-copy">Copy</button>
+        </div>
       </div>
 
       <!-- Host only: paste back what the joiner sends. -->
       <div id="mp-step-answer" style="display:none">
         <div class="hint">Then paste your friend's response here:</div>
-        <textarea id="mp-in-answer" placeholder="Paste response"></textarea>
-        <div class="row"><button id="mp-connect">Connect</button></div>
+        <div class="codeline">
+          <input id="mp-in-answer" type="text" spellcheck="false" placeholder="Paste response">
+          <button id="mp-connect">Connect</button>
+        </div>
       </div>
 
-      <!-- Lobby: agreed map, both races, host starts a 5s countdown. -->
+      <!-- Lobby: player slots + game info, host starts a 5s countdown. -->
       <div id="mp-lobby" style="display:none">
-        <div class="hint" id="mp-lobby-map"></div>
-        <div class="hint" id="mp-lobby-peer"></div>
+        <div class="lobby">
+          <div class="slots">
+            <div class="slot" id="mp-s0"><span class="nm" id="mp-n0">Player 1</span>
+              <select id="mp-r0"></select></div>
+            <div class="slot" id="mp-s1"><span class="nm" id="mp-n1">Open</span>
+              <select id="mp-r1"></select></div>
+          </div>
+          <div class="ginfo">
+            <div><label>Type</label><span>Melee</span></div>
+            <div><label>Map</label><span id="mp-gi-map">&mdash;</span></div>
+            <div><label>Speed</label><span id="mp-gi-speed">Fastest</span></div>
+          </div>
+        </div>
         <div class="row"><button id="mp-start">Start game</button></div>
       </div>
 

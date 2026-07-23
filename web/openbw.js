@@ -829,13 +829,22 @@ const mp = {
   stepInvite: $('mp-step-invite'), inInvite: $('mp-in-invite'), accept: $('mp-accept'),
   stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
   stepAnswer: $('mp-step-answer'), inAnswer: $('mp-in-answer'), connect: $('mp-connect'),
-  lobby: $('mp-lobby'), lobbyMap: $('mp-lobby-map'), lobbyPeer: $('mp-lobby-peer'), start: $('mp-start'),
-  status: $('mp-status'),
+  lobby: $('mp-lobby'), start: $('mp-start'), status: $('mp-status'),
+  s: [$('mp-s0'), $('mp-s1')], n: [$('mp-n0'), $('mp-n1')], r: [$('mp-r0'), $('mp-r1')],
+  giMap: $('mp-gi-map'), giSpeed: $('mp-gi-speed'),
 };
+
+// Random is a lobby choice, not something the engine understands. The host resolves it
+// the instant the countdown ends and puts the concrete races in the authoritative `start`
+// message, so both peers init from an identical list and neither rolls its own dice.
+const RACES = [{ v: 1, n: 'Terran' }, { v: 0, n: 'Zerg' }, { v: 2, n: 'Protoss' }, { v: -1, n: 'Random' }];
+const fillRaces = (sel) => { for (const r of RACES) sel.add(new Option(r.n, r.v)); };
+const resolveRace = (r) => (r === -1 ? [0, 1, 2][(Math.random() * 3) | 0] : r);
 const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className = cls; };
 const mpShow = (el, on) => { el.style.display = on ? 'block' : 'none'; };
 
 for (const m of MAPS) mp.map.add(new Option(m.name, m.file));
+for (const sel of [mp.race, mp.r[0], mp.r[1]]) fillRaces(sel);
 
 let mpLink = null, mpRole = null, mpMap = MAPS[0].file, mpPeerRace = 1, mpLocked = false;
 
@@ -867,37 +876,51 @@ const mpBoot = (slots, mySlot) => {
     .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
 };
 
-const mpRaceName = (r) => (r === 0 ? 'Zerg' : r === 2 ? 'Protoss' : 'Terran');
-const mpSlots = () => (mpRole === 'host'
-  ? [{ slot: 0, race: +mp.race.value }, { slot: 1, race: mpPeerRace }]
-  : [{ slot: 0, race: mpPeerRace }, { slot: 1, race: +mp.race.value }]);
+const mpRaceName = (r) => (RACES.find((x) => x.v === r) || RACES[0]).n;
+const mpMine = () => (mpRole === 'host' ? 0 : 1);
+const mpTheirs = () => (mpRole === 'host' ? 1 : 0);
+const mpSlots = () => [{ slot: 0, race: +mp.r[0].value }, { slot: 1, race: +mp.r[1].value }];
 
 function mpEnterLobby() {
-  mpShow(mp.stepInvite, false); mpShow(mp.stepShare, false); mpShow(mp.stepAnswer, false);
+  mpHideSteps();
   mpShow(mp.lobby, true);
-  mp.lobbyMap.textContent = 'Map: ' + (MAPS.find((m) => m.file === mpMap) || {}).name;
-  mpShow(mp.start, mpRole === 'host');
+  mp.giMap.textContent = (MAPS.find((m) => m.file === mpMap) || {}).name || '—';
   mp.start.style.display = mpRole === 'host' ? '' : 'none';
+  // Your row is editable; your opponent's mirrors what they picked.
+  mp.r[mpMine()].value = String(+mp.race.value);
+  mp.r[mpTheirs()].value = String(mpPeerRace);
+  mp.r[mpMine()].disabled = false;
+  mp.r[mpTheirs()].disabled = true;
+  mp.n[mpMine()].textContent = 'You';
+  mp.n[mpTheirs()].textContent = 'Opponent';
+  mp.s[mpMine()].classList.add('you');
+  for (const el of mp.s) el.classList.remove('open');
   mpUpdateLobby();
   mpSay('Connected.', 'ok');
 }
 function mpUpdateLobby() {
-  mp.lobbyPeer.textContent = `You: ${mpRaceName(+mp.race.value)}  ·  Opponent: ${mpRaceName(mpPeerRace)}`;
+  mp.giSpeed.textContent = 'Fastest';
 }
 
 // Races may change freely in the lobby; both sides mirror each other until the lock.
-mp.race.onchange = () => {
+const mpSendRace = () => {
   mpUpdateLobby();
-  if (mpLink) mpLink.sendControl({ t: 'race', race: +mp.race.value });
+  if (mpLink) mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value });
 };
+mp.r[0].onchange = mp.r[1].onchange = mpSendRace;
+mp.race.onchange = () => { if (mpRole) { mp.r[mpMine()].value = mp.race.value; mpSendRace(); } };
 mp.map.onchange = () => { mpMap = mp.map.value; };
 
 function mpCountdown(n) {
-  if (n <= LOCK_AT && !mpLocked) { mpLocked = true; mp.race.disabled = mp.map.disabled = true; }
+  if (n <= LOCK_AT && !mpLocked) {
+    mpLocked = true;
+    mp.race.disabled = mp.map.disabled = mp.r[0].disabled = mp.r[1].disabled = true;
+  }
   if (n <= 0) {
-    const slots = mpSlots();
-    if (mpRole === 'host') mpLink.sendControl({ t: 'start', slots, you: 1 });
-    mpBoot(slots, mpRole === 'host' ? 0 : 1);
+    if (mpRole !== 'host') return;          // the joiner starts on the host's `start`
+    const slots = mpSlots().map((s) => ({ slot: s.slot, race: resolveRace(s.race) }));
+    mpLink.sendControl({ t: 'start', slots, you: 1 });
+    mpBoot(slots, 0);
     return;
   }
   mpSay(`Starting in ${n}…${n <= LOCK_AT ? ' (races locked)' : ''}`, 'ok');
@@ -911,7 +934,12 @@ function mpNewLink(net, onOpen) {
   return new net.PeerLink({
     onOpen,
     onControl: (msg) => {
-      if (msg.t === 'race') { mpPeerRace = msg.race; mpUpdateLobby(); return; }
+      if (msg.t === 'race') {
+        mpPeerRace = msg.race;
+        if (mpRole) mp.r[mpTheirs()].value = String(msg.race);
+        mpUpdateLobby();
+        return;
+      }
       if (msg.t === 'tick') { mpCountdown(msg.n); return; }
       if (msg.t === 'start') { mpBoot(msg.slots, msg.you); return; }
     },
