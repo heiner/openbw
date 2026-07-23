@@ -905,6 +905,18 @@ let mpLink = null, mpRole = null, mpMap = MAPS[0].file, mpPeerRace = START_RACE,
 function mpHideSteps() {
   for (const el of [mp.stepInvite, mp.stepShare, mp.stepAnswer, mp.lobby]) mpShow(el, false);
 }
+// Mark a handshake step finished: a green tick, faded, and its controls made inert so it
+// reads as history rather than something still to do.
+function mpStepDone(el) {
+  el.classList.add('done');
+  for (const c of el.querySelectorAll('input, button')) c.disabled = true;
+}
+function mpResetSteps() {
+  for (const el of [mp.stepInvite, mp.stepShare, mp.stepAnswer]) {
+    el.classList.remove('done');
+    for (const c of el.querySelectorAll('input, button')) c.disabled = false;
+  }
+}
 function mpSetRole(role) {
   if (mpRole) return false;                 // already committed
   mpRole = role;
@@ -920,6 +932,7 @@ function mpResetRole() {                    // let the user try again after a fa
   if (mpLink) { try { mpLink.close(); } catch {} mpLink = null; }
   mp.host.disabled = mp.join.disabled = false;
   mapSelect.disabled = false;
+  mpResetSteps();
   mpHideSteps();
 }
 
@@ -981,7 +994,7 @@ function mpCountdown(n) {
     mpBoot(slots, hostSlot);
     return;
   }
-  mpSay(`Starting in ${n}…${n <= LOCK_AT ? ' (races locked)' : ''}`, 'ok');
+  mpSay(`Starting in ${n}…`, 'ok');
   if (mpRole === 'host') {
     mpLink.sendControl({ t: 'tick', n });
     setTimeout(() => mpCountdown(n - 1), 1000);
@@ -1030,6 +1043,8 @@ mp.connect.onclick = async () => {
   try {
     const info = await mpLink.acceptAnswer(mp.inAnswer.value);
     mpPeerRace = info.race ?? 1;
+    mpStepDone(mp.stepShare);           // link was sent (they answered) and response accepted
+    mpStepDone(mp.stepAnswer);
     mpSay('Response accepted — connecting…');
   } catch (e) { mpSay(e.message, 'err'); console.error(e); }
 };
@@ -1064,6 +1079,7 @@ async function mpAcceptInvite(code) {
   mp.accept.style.display = 'none';
   mp.inviteHint.textContent = '1. Invite received from your friend:';
   mpShow(mp.stepInvite, true);
+  mpStepDone(mp.stepInvite);            // nothing left to do here; step 2 is the live one
   mpShow(mp.stepShare, true);
   mp.shareHint.textContent = '2. Send this response back to the host:';
   mp.out.value = answer;
