@@ -186,28 +186,48 @@
     <div id="mp">
       <h2>or play a friend (1v1)</h2>
       <div class="row">
-        <label>Your race
+        <label>Map <select id="mp-map"></select></label>
+        <label>Race
           <select id="mp-race">
             <option value="1">Terran</option>
             <option value="0">Zerg</option>
             <option value="2">Protoss</option>
           </select>
         </label>
-        <button id="mp-host">Host</button>
-        <button id="mp-join">Join</button>
       </div>
-      <div id="mp-panel" style="display:none">
-        <div class="hint" id="mp-hint"></div>
+      <div class="row" id="mp-setup">
+        <button id="mp-host">Host a game</button>
+        <button id="mp-join">Join with a code</button>
+      </div>
+
+      <!-- Joiner without a link: the only place anything is pasted in by a joiner. -->
+      <div id="mp-step-invite" style="display:none">
+        <div class="hint">Paste the invite code your friend sent:</div>
+        <textarea id="mp-in-invite" placeholder="Paste invite code"></textarea>
+        <div class="row"><button id="mp-accept">Continue</button></div>
+      </div>
+
+      <!-- Host shares the invite; joiner shares the response. Copy-out only. -->
+      <div id="mp-step-share" style="display:none">
+        <div class="hint" id="mp-share-hint"></div>
         <textarea id="mp-out" readonly></textarea>
-        <div class="row">
-          <button id="mp-copy">Copy</button>
-        </div>
-        <div class="hint" id="mp-hint2"></div>
-        <textarea id="mp-in" placeholder="Paste the code from the other player here"></textarea>
-        <div class="row">
-          <button id="mp-go">Continue</button>
-        </div>
+        <div class="row"><button id="mp-copy">Copy</button></div>
       </div>
+
+      <!-- Host only: paste back what the joiner sends. -->
+      <div id="mp-step-answer" style="display:none">
+        <div class="hint">Then paste your friend's response here:</div>
+        <textarea id="mp-in-answer" placeholder="Paste response"></textarea>
+        <div class="row"><button id="mp-connect">Connect</button></div>
+      </div>
+
+      <!-- Lobby: agreed map, both races, host starts a 5s countdown. -->
+      <div id="mp-lobby" style="display:none">
+        <div class="hint" id="mp-lobby-map"></div>
+        <div class="hint" id="mp-lobby-peer"></div>
+        <div class="row"><button id="mp-start">Start game</button></div>
+      </div>
+
       <div id="mp-status"></div>
     </div>
   </div>

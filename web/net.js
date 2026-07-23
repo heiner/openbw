@@ -105,17 +105,36 @@ export class PeerLink {
     for (const [f, b] of q) fn(f, b);
   }
 
-  // Non-trickle ICE: wait for gathering so the blob is self-contained and pasteable.
+  // Non-trickle ICE: the blob must be self-contained, so we wait for candidates before
+  // encoding it. Waiting for iceGatheringState === 'complete' is the obvious way and also
+  // the slow way — it doesn't settle until every transport finishes or times out (mDNS
+  // registration, a blocked STUN server), which routinely costs seconds. Instead, finish
+  // shortly after the candidates that actually matter arrive: once we have a
+  // server-reflexive (public) candidate a peer behind NAT has what it needs, so we only
+  // grant stragglers a brief grace period. Anything arriving after that is dropped, which
+  // is the accepted trade for a pasteable, non-trickle blob.
   async #gathered() {
     if (this.pc.iceGatheringState === 'complete') return;
     await new Promise((res) => {
-      const done = () => {
-        if (this.pc.iceGatheringState !== 'complete') return;
-        this.pc.removeEventListener('icegatheringstatechange', done);
+      let settled = false, grace = 0;
+      const finish = () => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(grace); clearTimeout(hard);
+        this.pc.removeEventListener('icegatheringstatechange', onState);
+        this.pc.removeEventListener('icecandidate', onCand);
         res();
       };
-      this.pc.addEventListener('icegatheringstatechange', done);
-      setTimeout(res, 4000);   // don't hang forever if STUN is blocked
+      const onState = () => { if (this.pc.iceGatheringState === 'complete') finish(); };
+      const onCand = (e) => {
+        if (!e.candidate) return finish();        // null candidate: gathering really is done
+        const srflx = e.candidate.candidate.includes(' typ srflx');
+        clearTimeout(grace);
+        grace = setTimeout(finish, srflx ? 250 : 700);
+      };
+      this.pc.addEventListener('icegatheringstatechange', onState);
+      this.pc.addEventListener('icecandidate', onCand);
+      const hard = setTimeout(finish, 2500);      // hard cap if STUN is unreachable
     });
   }
 

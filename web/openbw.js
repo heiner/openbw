@@ -23,8 +23,32 @@ const MPQS = [
 // The melee map: a CC BY 4.0 map committed under web/maps/ and deployed with the
 // site (see web/maps/ATTRIBUTION.md). MAP_REMOTE is an optional fallback, used only
 // if a build ever ships without the map file.
-const MAP_LOCAL = './maps/Weave_v1.scx';
+const MAPS = [
+  { name: 'Weave',       file: './maps/Weave_v1.scx' },
+  { name: 'Benzene',     file: './maps/Benzene.scx' },
+  { name: 'Concourse',   file: './maps/Concourse_v1.scx' },
+  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx' },
+  { name: 'Thaw',        file: './maps/Thaw_v1.scx' },
+];
+const MAP_LOCAL = MAPS[0].file;
 const MAP_REMOTE = '';
+
+// Fetched map bytes, kept so the lobby can hash a map without re-downloading it.
+const mapCache = new Map();
+async function fetchMap(file) {
+  if (mapCache.has(file)) return mapCache.get(file);
+  const r = await fetch(file);
+  if (!r.ok) throw new Error('Map not available: ' + file);
+  const bytes = new Uint8Array(await r.arrayBuffer());
+  mapCache.set(file, bytes);
+  return bytes;
+}
+// Peers must run byte-identical terrain or their sims diverge immediately, so the map is
+// hash-verified rather than trusted by filename.
+async function mapHash(file) {
+  const d = await crypto.subtle.digest('SHA-256', await fetchMap(file));
+  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+}
 
 const $ = (id) => document.getElementById(id);
 const setBar = (f) => { $('bar').firstElementChild.style.width = (f * 100).toFixed(1) + '%'; };
@@ -78,7 +102,7 @@ async function fetchWithProgress(url, expected, onProgress) {
 }
 
 // Returns [stardat, broodat, patch_rt, map] as Uint8Arrays.
-async function loadAssets() {
+async function loadAssets(mapFile = MAP_LOCAL) {
   const db = await idbOpen();
   const out = [];
   for (let i = 0; i < MPQS.length; i++) {
@@ -106,11 +130,12 @@ async function loadAssets() {
     setBar((i + 1) / (MPQS.length + 1));
   }
   setMsg('Loading map…');
-  let mapBuf = null;
-  try { const r = await fetch(MAP_LOCAL); if (r.ok) mapBuf = await r.arrayBuffer(); } catch {}
-  if (!mapBuf && MAP_REMOTE) mapBuf = await (await fetch(MAP_REMOTE)).arrayBuffer();
-  if (!mapBuf) throw new Error('No map available — set MAP_REMOTE to a hosted .scx URL.');
-  out.push(new Uint8Array(mapBuf));
+  // fetchMap memoises, so a map the lobby already hashed isn't downloaded twice.
+  let mapBytes = null;
+  try { mapBytes = await fetchMap(mapFile); } catch {}
+  if (!mapBytes && MAP_REMOTE) mapBytes = new Uint8Array(await (await fetch(MAP_REMOTE)).arrayBuffer());
+  if (!mapBytes) throw new Error('No map available — set MAP_REMOTE to a hosted .scx URL.');
+  out.push(mapBytes);
   setBar(1);
   return out;
 }
@@ -272,7 +297,7 @@ async function boot(session) {
     }
   });
 
-  const assets = await loadAssets();
+  const assets = await loadAssets(session.mapFile || MAP_LOCAL);
 
   let memory;
   const getMemory = () => memory;
@@ -788,102 +813,189 @@ for (const b of document.querySelectorAll('#controls button[data-race]')) {
 }
 
 // --- multiplayer: 1v1 over a copy-paste WebRTC link (direct-cable style) ------------
-// The host makes an offer, the joiner pastes it and returns an answer, the host pastes
-// that back. No signalling server is involved. Once the channel opens the host is
-// authoritative for the slot list, so both peers init from identical settings.
-const MP_DELAY = 4;   // input delay in frames (~170 ms at "fastest")
+// The host makes an offer; the joiner opens the link (which auto-fills it) and returns a
+// response the host pastes back. The joiner never pastes anything when they arrive via a
+// link, so the UI only ever shows them a copy-out box. No signalling server is involved.
+//
+// After the channel opens both sit in a lobby until the host starts a 5s countdown; races
+// lock for the final 2s. The host is authoritative for the final slot list, and the map is
+// hash-verified so peers can't silently run different terrain.
+const MP_DELAY = 4;        // input delay in frames (~170 ms at "fastest")
+const COUNTDOWN = 5, LOCK_AT = 2;
+
 const mp = {
-  race: $('mp-race'), host: $('mp-host'), join: $('mp-join'), panel: $('mp-panel'),
-  out: $('mp-out'), copy: $('mp-copy'), inp: $('mp-in'), go: $('mp-go'),
-  status: $('mp-status'), hint: $('mp-hint'), hint2: $('mp-hint2'),
+  map: $('mp-map'), race: $('mp-race'), setup: $('mp-setup'),
+  host: $('mp-host'), join: $('mp-join'),
+  stepInvite: $('mp-step-invite'), inInvite: $('mp-in-invite'), accept: $('mp-accept'),
+  stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
+  stepAnswer: $('mp-step-answer'), inAnswer: $('mp-in-answer'), connect: $('mp-connect'),
+  lobby: $('mp-lobby'), lobbyMap: $('mp-lobby-map'), lobbyPeer: $('mp-lobby-peer'), start: $('mp-start'),
+  status: $('mp-status'),
 };
 const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className = cls; };
-let mpLink = null, mpRole = null, mpPeerRace = null;
+const mpShow = (el, on) => { el.style.display = on ? 'block' : 'none'; };
+
+for (const m of MAPS) mp.map.add(new Option(m.name, m.file));
+
+let mpLink = null, mpRole = null, mpMap = MAPS[0].file, mpPeerRace = 1, mpLocked = false;
+
+// Choosing a role is one-way until it fails or the game starts. Without this, clicking
+// Host and Join in any order left both flows' panels on screen at once.
+function mpHideSteps() {
+  for (const el of [mp.stepInvite, mp.stepShare, mp.stepAnswer, mp.lobby]) mpShow(el, false);
+}
+function mpSetRole(role) {
+  if (mpRole) return false;                 // already committed
+  mpRole = role;
+  mp.host.disabled = mp.join.disabled = true;
+  mpHideSteps();
+  return true;
+}
+function mpResetRole() {                    // let the user try again after a failure
+  mpRole = null;
+  if (mpLink) { try { mpLink.close(); } catch {} mpLink = null; }
+  mp.host.disabled = mp.join.disabled = false;
+  mp.map.disabled = false;
+  mpHideSteps();
+}
+
+const mpNet = () => import('./net.js?v=' + BUILD);
 
 const mpBoot = (slots, mySlot) => {
   $('controls').style.display = 'none';
-  boot({ slots, mySlot, link: mpLink, delay: MP_DELAY, isHost: mpRole === 'host' })
+  boot({ slots, mySlot, link: mpLink, delay: MP_DELAY, isHost: mpRole === 'host', mapFile: mpMap })
     .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
 };
 
-const mpNet = () => import('./net.js?v=' + BUILD);
+const mpRaceName = (r) => (r === 0 ? 'Zerg' : r === 2 ? 'Protoss' : 'Terran');
+const mpSlots = () => (mpRole === 'host'
+  ? [{ slot: 0, race: +mp.race.value }, { slot: 1, race: mpPeerRace }]
+  : [{ slot: 0, race: mpPeerRace }, { slot: 1, race: +mp.race.value }]);
+
+function mpEnterLobby() {
+  mpShow(mp.stepInvite, false); mpShow(mp.stepShare, false); mpShow(mp.stepAnswer, false);
+  mpShow(mp.lobby, true);
+  mp.lobbyMap.textContent = 'Map: ' + (MAPS.find((m) => m.file === mpMap) || {}).name;
+  mpShow(mp.start, mpRole === 'host');
+  mp.start.style.display = mpRole === 'host' ? '' : 'none';
+  mpUpdateLobby();
+  mpSay('Connected.', 'ok');
+}
+function mpUpdateLobby() {
+  mp.lobbyPeer.textContent = `You: ${mpRaceName(+mp.race.value)}  ·  Opponent: ${mpRaceName(mpPeerRace)}`;
+}
+
+// Races may change freely in the lobby; both sides mirror each other until the lock.
+mp.race.onchange = () => {
+  mpUpdateLobby();
+  if (mpLink) mpLink.sendControl({ t: 'race', race: +mp.race.value });
+};
+mp.map.onchange = () => { mpMap = mp.map.value; };
+
+function mpCountdown(n) {
+  if (n <= LOCK_AT && !mpLocked) { mpLocked = true; mp.race.disabled = mp.map.disabled = true; }
+  if (n <= 0) {
+    const slots = mpSlots();
+    if (mpRole === 'host') mpLink.sendControl({ t: 'start', slots, you: 1 });
+    mpBoot(slots, mpRole === 'host' ? 0 : 1);
+    return;
+  }
+  mpSay(`Starting in ${n}…${n <= LOCK_AT ? ' (races locked)' : ''}`, 'ok');
+  if (mpRole === 'host') {
+    mpLink.sendControl({ t: 'tick', n });
+    setTimeout(() => mpCountdown(n - 1), 1000);
+  }
+}
 
 function mpNewLink(net, onOpen) {
   return new net.PeerLink({
     onOpen,
     onControl: (msg) => {
-      // The host tells the joiner the authoritative slot list and which slot it owns.
-      if (msg.t === 'start') mpBoot(msg.slots, msg.you);
+      if (msg.t === 'race') { mpPeerRace = msg.race; mpUpdateLobby(); return; }
+      if (msg.t === 'tick') { mpCountdown(msg.n); return; }
+      if (msg.t === 'start') { mpBoot(msg.slots, msg.you); return; }
     },
     onClose: (why) => mpSay('Connection ' + why + '.', 'err'),
   });
 }
 
 mp.host.onclick = async () => {
+  if (!mpSetRole('host')) return;         // guard *before* awaiting, or a second click slips in
   try {
     const net = await mpNet();
-    mpRole = 'host';
-    mp.host.disabled = mp.join.disabled = true;
-    mpSay('Generating invite (gathering network candidates)…');
-    mpLink = mpNewLink(net, () => {
-      const slots = [{ slot: 0, race: +mp.race.value }, { slot: 1, race: mpPeerRace }];
-      mpLink.sendControl({ t: 'start', slots, you: 1 });
-      mpBoot(slots, 0);
-    });
-    const code = await mpLink.createOffer({ race: +mp.race.value });
+    mpMap = mp.map.value;
+    mpSay('Preparing invite…');
+    const hash = await mapHash(mpMap);
+    mpLink = mpNewLink(net, () => { mpLink.sendControl({ t: 'race', race: +mp.race.value }); mpEnterLobby(); });
+    const code = await mpLink.createOffer({ race: +mp.race.value, map: mpMap, hash });
     const url = location.origin + location.pathname + '#i=' + code;
     const fits = code.length <= net.MAX_URL_CODE;
-    mp.panel.style.display = 'block';
-    mp.hint.textContent = fits ? '1. Send this link to your friend:'
-                               : '1. Send this invite code to your friend:';
+    mpShow(mp.stepShare, true);
+    mp.shareHint.textContent = fits ? '1. Send this link to your friend:'
+                                    : '1. Send this invite code to your friend:';
     mp.out.value = fits ? url : code;
-    mp.hint2.textContent = '2. Paste the response they send back, then press Continue.';
+    mpShow(mp.stepAnswer, true);
     mpSay('Waiting for their response…');
+  } catch (e) { mpResetRole(); mpSay(e.message, 'err'); console.error(e); }
+};
+
+// Host: consume the joiner's response.
+mp.connect.onclick = async () => {
+  try {
+    const info = await mpLink.acceptAnswer(mp.inAnswer.value);
+    mpPeerRace = info.race ?? 1;
+    mpSay('Response accepted — connecting…');
   } catch (e) { mpSay(e.message, 'err'); console.error(e); }
 };
+
+// Joiner: accept an invite (from the link, or pasted if the host sent a bare code).
+async function mpAcceptInvite(code) {
+  if (mpRole === 'host') return;          // can't join your own game
+  if (!mpRole) mpSetRole('join');
+  const net = await mpNet();
+  const at = code.indexOf('#i=');
+  if (at >= 0) code = code.slice(at + 3);
+  if (!code.trim()) { mpSay('Paste the invite code first.', 'err'); return; }
+  mpSay('Checking the map…');
+  mpLink = mpNewLink(net, () => { mpLink.sendControl({ t: 'race', race: +mp.race.value }); mpEnterLobby(); });
+  const { info, answer } = await mpLink.acceptOffer(code, { race: +mp.race.value });
+  // Same terrain, verified by content — not by filename.
+  mpMap = info.map || MAP_LOCAL;
+  mp.map.value = mpMap;
+  mp.map.disabled = true;                 // the host picks the map
+  const mine = await mapHash(mpMap).catch(() => null);
+  if (!mine || mine !== info.hash) {
+    mpSay(`Map mismatch — the host is playing a map this build doesn't have byte-for-byte. ` +
+          `You both need the same version.`, 'err');
+    mpResetRole();
+    return;
+  }
+  mpPeerRace = info.race ?? 1;
+  mpShow(mp.stepInvite, false);
+  mpShow(mp.stepShare, true);
+  mp.shareHint.textContent = 'Send this response back to the host:';
+  mp.out.value = answer;
+  mpSay('Waiting for the host…');
+}
 
 mp.join.onclick = () => {
-  mpRole = 'join';
-  mp.host.disabled = mp.join.disabled = true;
-  mp.panel.style.display = 'block';
-  mp.hint.textContent = '';
-  mp.out.value = '';
-  mp.hint2.textContent = '1. Paste the invite link or code from the host, then press Continue.';
+  if (!mpSetRole('join')) return;
+  mpShow(mp.stepInvite, true);
   mpSay('');
 };
-
-mp.go.onclick = async () => {
-  try {
-    const net = await mpNet();
-    if (mpRole === 'host') {
-      const info = await mpLink.acceptAnswer(mp.inp.value);
-      mpPeerRace = info.race;
-      mpSay('Response accepted — connecting…');
-      return;
-    }
-    if (mpRole !== 'join') return;
-    let code = mp.inp.value.trim();
-    const at = code.indexOf('#i=');
-    if (at >= 0) code = code.slice(at + 3);       // accept a pasted link or a bare code
-    if (!code) { mpSay('Paste the invite from the host first.', 'err'); return; }
-    if (!mpLink) mpLink = mpNewLink(net, () => mpSay('Connected — waiting for the host to start…', 'ok'));
-    const { answer } = await mpLink.acceptOffer(code, { race: +mp.race.value });
-    mp.hint.textContent = '2. Send this response back to the host:';
-    mp.out.value = answer;
-    mp.hint2.textContent = '';
-    mp.inp.value = '';
-    mpSay('Waiting for the host to accept…');
-  } catch (e) { mpSay(e.message, 'err'); console.error(e); }
-};
+mp.accept.onclick = () => mpAcceptInvite(mp.inInvite.value).catch((e) => {
+  mpResetRole(); mpSay(e.message, 'err'); console.error(e);
+});
+mp.start.onclick = () => { mp.start.disabled = true; mpCountdown(COUNTDOWN); };
 
 mp.copy.onclick = async () => {
   try { await navigator.clipboard.writeText(mp.out.value); mpSay('Copied to clipboard.', 'ok'); }
   catch { mp.out.select(); mpSay('Press Cmd/Ctrl+C to copy.'); }
 };
 
-// Arriving from an invite link: jump straight to the join flow with the code prefilled.
+// Arriving from an invite link: the joiner pastes nothing — accept it straight away and
+// show only the response they need to send back.
 if (location.hash.startsWith('#i=')) {
-  mp.join.click();
-  mp.inp.value = location.hash.slice(3);
-  mpSay('Invite loaded — pick your race, then press Continue.');
+  mpShow(mp.setup, false);
+  mpAcceptInvite(location.hash.slice(3)).catch((e) => { mpResetRole(); mpSay(e.message, 'err'); console.error(e); });
 }
