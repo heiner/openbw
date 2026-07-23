@@ -256,8 +256,9 @@ struct play_ui : ui_functions {
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
 	int alert_color = -1;                         // minimap flash palette index (lazy)
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
+	int alert_ping_cooldown = 0;                  // update-ticks until a new minimap ping
 	int event_tick = 0;                           // local tick for the flash blink phase
-	static const int ALERT_TTL = 150;             // how long a minimap ping stays up
+	static const int ALERT_TTL = 90;              // 3 sweeps of the 30-tick ping cycle
 	struct alert_t { xy pos; int ttl; };
 	a_vector<alert_t> alerts;                     // active minimap flash markers
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
@@ -780,15 +781,23 @@ struct play_ui : ui_functions {
 		}
 	}
 	void add_alert(xy pos) {
-		bool merged = false;
-		for (auto& a : alerts) {
-			int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
-			if (dx * dx + dy * dy < 256 * 256) { a.ttl = ALERT_TTL; merged = true; break; }   // ~8 tiles
+		// A ping runs a fixed number of sweeps and then stops. Refreshing it on every
+		// damage tick (as this used to) meant a sustained fight left the minimap pinging
+		// forever, so an existing nearby ping is left alone to expire and a new one is
+		// rate-limited.
+		if (alert_ping_cooldown == 0) {
+			bool near = false;
+			for (auto& a : alerts) {
+				int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
+				if (dx * dx + dy * dy < 256 * 256) { near = true; break; }   // ~8 tiles
+			}
+			if (!near && alerts.size() < 8) {
+				alerts.push_back({pos, ALERT_TTL});
+				alert_ping_cooldown = 600;   // ~10 s at 60 fps
+			}
 		}
-		if (!merged && alerts.size() < 8) alerts.push_back({pos, ALERT_TTL});
-		// Don't nag: the original stays quiet while you're already looking at the fight,
-		// and leaves a long gap between announcements. Without both of these a sustained
-		// battle re-triggers the advisor endlessly.
+		// Voice: quiet while the fight is already on screen (as the original is), and a
+		// long gap between announcements.
 		bool on_screen = pos.x >= screen_pos.x && pos.y >= screen_pos.y &&
 		                 pos.x < screen_pos.x + (int)screen_width &&
 		                 pos.y < screen_pos.y + (int)screen_height;
@@ -798,11 +807,13 @@ struct play_ui : ui_functions {
 			alert_cooldown = 1800;   // ~30 s at 60 fps
 		}
 	}
+
 	// Once per frame: fire unit-ready voices on completion and raise under-attack alerts
 	// when an own unit loses life. The first pass seeds silently so startup units are quiet.
 	void poll_events() {
 		++event_tick;
 		if (alert_cooldown > 0) --alert_cooldown;
+		if (alert_ping_cooldown > 0) --alert_ping_cooldown;
 		for (size_t i = 0; i != alerts.size();) {
 			if (--alerts[i].ttl <= 0) { alerts[i] = alerts.back(); alerts.pop_back(); }
 			else ++i;
@@ -1114,17 +1125,16 @@ struct play_ui : ui_functions {
 			if (px >= area.from.x && px < area.to.x && py >= area.from.y && py < area.to.y)
 				data[(size_t)py * data_pitch + px] = (uint8_t)alert_color;
 		};
-		const int CYCLE = 30, R0 = 12, ARM = 4;
+		const int CYCLE = 30, R0 = 14, R1 = 2;
 		for (auto& a : alerts) {
 			int mx = area.from.x + a.pos.x / 32, my = area.from.y + a.pos.y / 32;
-			int r = R0 - (((ALERT_TTL - a.ttl) % CYCLE) * R0) / CYCLE;   // sweeps R0 -> 0
-			for (int i = 0; i <= ARM; ++i) {
-				plot(mx - r + i, my - r); plot(mx - r, my - r + i);      // corner brackets
-				plot(mx + r - i, my - r); plot(mx + r, my - r + i);
-				plot(mx - r + i, my + r); plot(mx - r, my + r - i);
-				plot(mx + r - i, my + r); plot(mx + r, my + r - i);
+			// A full box outline closing in on the spot, repeating every CYCLE ticks.
+			int r = R0 - (((ALERT_TTL - a.ttl) % CYCLE) * (R0 - R1)) / CYCLE;
+			for (int i = -r; i <= r; ++i) {
+				plot(mx + i, my - r); plot(mx + i, my + r);   // top / bottom
+				plot(mx - r, my + i); plot(mx + r, my + i);   // left / right
 			}
-			plot(mx, my); plot(mx - 1, my); plot(mx + 1, my); plot(mx, my - 1); plot(mx, my + 1);
+			plot(mx, my);
 		}
 	}
 

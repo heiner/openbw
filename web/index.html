@@ -78,23 +78,16 @@
   #resources .gas .dot { background: #4ade80; }
   #resources .sup .dot { background: #cbd5e1; }
   #resources .cap { color: #f87171; }
-  #pausebtn { position: fixed; top: 8px; left: 12px; z-index: 5; display: none;
-    width: 34px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
-    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px; cursor: pointer; }
-  #pausebtn:hover { background: rgba(0,0,0,.72); }
-  #mute { position: fixed; top: 8px; left: 52px; z-index: 5; display: none;
-    width: 34px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
-    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px; cursor: pointer; }
-  #mute:hover { background: rgba(0,0,0,.72); }
-  #settingsbtn { position: fixed; top: 8px; left: 92px; z-index: 5; display: none;
-    width: 30px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
-    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px; cursor: pointer; }
-  #settingsbtn:hover { background: rgba(0,0,0,.72); }
-  #helpbtn { position: fixed; top: 8px; left: 128px; z-index: 5; display: none;
-    width: 30px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
-    background: rgba(0,0,0,.5); color: #e2e8f0; font: 700 16px system-ui, sans-serif;
-    line-height: 30px; cursor: pointer; }
-  #helpbtn:hover { background: rgba(0,0,0,.72); }
+  /* One flex row, so hiding a button (pause is hidden in multiplayer) reflows the
+     rest instead of leaving a gap. */
+  #topbar { position: fixed; top: 8px; left: 12px; z-index: 5; display: none; gap: 6px; }
+  #topbar button { height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
+    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px;
+    cursor: pointer; }
+  #topbar button:hover { background: rgba(0,0,0,.72); }
+  #pausebtn, #mute { width: 34px; }
+  #settingsbtn, #helpbtn { width: 30px; }
+  #helpbtn { font: 700 16px system-ui, sans-serif; }
   #settings { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 320px;
     padding: 12px 16px; border-radius: 10px; background: rgba(15,23,42,.96); color: #cbd5e1;
     font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 10px 34px rgba(0,0,0,.55); }
@@ -153,10 +146,12 @@
 <body>
 <div id="wrap"><canvas id="screen" width="1280" height="800"></canvas></div>
 <div id="resources"></div>
-<button id="pausebtn" title="Pause">⏸</button>
-<button id="mute" title="Mute sound">🔊</button>
-<button id="settingsbtn" title="Settings">⚙️</button>
-<button id="helpbtn" title="Controls">?</button>
+<div id="topbar">
+  <button id="pausebtn" title="Pause">⏸</button>
+  <button id="mute" title="Mute sound">🔊</button>
+  <button id="settingsbtn" title="Settings">⚙️</button>
+  <button id="helpbtn" title="Controls">?</button>
+</div>
 <div id="settings">
   <h3>Settings</h3>
   <label><input type="checkbox" id="opt-lines"> Show order &amp; rally lines</label>

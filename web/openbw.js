@@ -274,7 +274,7 @@ async function boot(session) {
     muteBtn.textContent = muted ? '🔇' : '🔊';
     muteBtn.title = muted ? 'Unmute sound' : 'Mute sound';
   };
-  muteBtn.style.display = 'block';
+  $('topbar').style.display = 'flex';
   muteBtn.onclick = () => {
     muted = !muted;
     try { localStorage.setItem('openbw-muted', muted ? '1' : '0'); } catch {}
@@ -285,7 +285,6 @@ async function boot(session) {
 
   // Controls popup toggled by the "?" button; dismissed by clicking elsewhere.
   const helpBtn = $('helpbtn'), helpPop = $('help');
-  helpBtn.style.display = 'block';
   helpBtn.onclick = (e) => {
     e.stopPropagation();
     $('settings').style.display = 'none';
@@ -403,7 +402,6 @@ async function boot(session) {
   // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
   // persists. Wired here because it drives the wasm, which is now instantiated.
   const settingsBtn = $('settingsbtn'), settingsPop = $('settings'), optLines = $('opt-lines');
-  settingsBtn.style.display = 'block';
   let showLines = false;
   try { showLines = localStorage.getItem('openbw-order-lines') === '1'; } catch {}
   optLines.checked = showLines;
@@ -553,8 +551,9 @@ async function boot(session) {
   const pauseBtn = $('pausebtn'), pausedEl = $('paused');
   const pausedSpan = pausedEl.querySelector('span');
   // No pause in multiplayer: lockstep means a local pause just stops feeding turns and
-  // stalls the opponent, who sees "Waiting for opponent" until you resume.
-  pauseBtn.style.display = link ? 'none' : 'block';
+  // stalls the opponent, who sees "Waiting for opponent" until you resume. Hiding it
+  // reflows the flex row, so the remaining icons shift left rather than leaving a gap.
+  pauseBtn.style.display = link ? 'none' : '';
   // One centre banner serves every state: an explicit message (disconnect/desync) wins,
   // otherwise paused, otherwise blocked waiting on a peer's turn.
   let bannerText = null, bannerOverride = '', bannerTimer = 0;
