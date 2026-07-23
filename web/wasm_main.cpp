@@ -73,12 +73,16 @@ play_ui* g_ui = nullptr;
 
 #define OPENBW_EXPORT(name) __attribute__((export_name(#name))) extern "C"
 
-// Build the game. Call after all four archives' bytes are available in JS.
-OPENBW_EXPORT(openbw_init) void openbw_init(int width, int height, int race, int slot) {
+// Build the game with `n` occupied slots. Every peer must pass an identical slot list (and
+// the same map) or their initial states differ and lockstep is broken from frame 0.
+static void init_game(int width, int height, int my_slot, const mp_slot* slots, size_t n) {
 	g_loader = new loader_t(data_loading::data_files_directory<loader_t>(""));
 
+	race_t my_race = race_t::terran;
+	for (size_t k = 0; k != n; ++k) if (slots[k].slot == my_slot) my_race = slots[k].race;
+
 	game_player player(*g_loader);
-	g_ui = new play_ui(std::move(player), slot, (race_t)race);
+	g_ui = new play_ui(std::move(player), my_slot, my_race);
 	g_ui->exit_on_close = false;
 	g_ui->load_data_file = [](a_vector<uint8_t>& data, a_string filename) {
 		(*g_loader)(data, std::move(filename));
@@ -86,18 +90,24 @@ OPENBW_EXPORT(openbw_init) void openbw_init(int width, int height, int race, int
 	g_ui->init();
 
 	data_loading::mpq_file<data_loading::js_file_reader<>> map_loader("openbw.map");
-	setup_melee(g_ui->player.st(), map_loader, slot, (race_t)race);
+	setup_melee_slots(g_ui->player.st(), map_loader, slots, n);
 
 	g_ui->wnd.create("OpenBW", 0, 0, width, height);
 	g_ui->resize(width, height);
 	g_ui->set_image_data();
-	xy start = g_ui->game_st.start_locations[slot];
+	xy start = g_ui->game_st.start_locations[my_slot];
 	g_ui->screen_pos = start - xy(width / 2, height / 2);
 
-	ui::log("openbw_init: map '%s' %dx%d, slot %d, units=%d, fog_player=%d\n",
+	ui::log("openbw_init: map '%s' %dx%d, slot %d of %d, units=%d, fog_player=%d\n",
 		g_ui->game_st.scenario_name, (int)g_ui->game_st.map_width,
-		(int)g_ui->game_st.map_height, slot, count_units(g_ui->player.st(), slot),
-		g_ui->fog_player);
+		(int)g_ui->game_st.map_height, my_slot, (int)n,
+		count_units(g_ui->player.st(), my_slot), g_ui->fog_player);
+}
+
+// Single-player. Call after all four archives' bytes are available in JS.
+OPENBW_EXPORT(openbw_init) void openbw_init(int width, int height, int race, int slot) {
+	mp_slot s{slot, (race_t)race};
+	init_game(width, height, slot, &s, 1);
 }
 
 // Resize the render target (e.g. when the browser window changes). Recreates
@@ -199,6 +209,18 @@ OPENBW_EXPORT(openbw_in_ptr) uint8_t* openbw_in_ptr(int len) {
 OPENBW_EXPORT(openbw_apply) void openbw_apply(int owner, int len) {
 	if (g_ui && len > 0 && (size_t)len <= g_inbuf.size())
 		g_ui->apply_commands(owner, g_inbuf.data(), (size_t)len);
+}
+
+// Multiplayer init: the host writes the slot list into the openbw_in_ptr scratch buffer as
+// int32 pairs [slot, race, slot, race, …] first, then calls this. Every peer must pass an
+// identical list and load the same map, or the initial states differ and lockstep breaks
+// at frame 0. (int is 32-bit on wasm32, so the pairs read back directly.)
+OPENBW_EXPORT(openbw_init_mp) void openbw_init_mp(int width, int height, int my_slot, int n) {
+	if (n <= 0 || g_inbuf.size() < (size_t)n * 2 * sizeof(int)) return;
+	a_vector<mp_slot> slots;
+	const int* p = (const int*)g_inbuf.data();
+	for (int i = 0; i != n; ++i) slots.push_back(mp_slot{p[2 * i], (race_t)p[2 * i + 1]});
+	init_game(width, height, my_slot, slots.data(), slots.size());
 }
 
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }

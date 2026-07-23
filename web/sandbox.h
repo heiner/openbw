@@ -25,8 +25,13 @@ inline race_t parse_race(const char* s) {
 // else inactive. Mirrors the melee setup path that replay.h drives. Runs
 // synchronously — when it returns, `st` is ready to simulate. `load_data_file`
 // is the functor that pulls staredit/scenario.chk from the map archive.
+struct mp_slot { int slot; race_t race; };
+
+// Melee setup for an arbitrary set of occupied slots. Single-player is just n == 1;
+// multiplayer occupies every participating slot so all peers build a byte-identical
+// initial state (which is what lockstep depends on).
 template<typename load_data_file_F>
-void setup_melee(state& st, load_data_file_F&& load_data_file, int my_player, race_t my_race) {
+void setup_melee_slots(state& st, load_data_file_F&& load_data_file, const mp_slot* slots, size_t n) {
 	game_load_functions game_load(st);
 	game_load.load_map(std::forward<load_data_file_F>(load_data_file), [&]() {
 		game_load.setup_info.victory_condition = 0;   // melee, not UMS
@@ -35,16 +40,23 @@ void setup_melee(state& st, load_data_file_F&& load_data_file, int my_player, ra
 		game_load.setup_info.resource_type = 1;         // standard melee resources
 		game_load.setup_info.starting_minerals = 50;   // authentic melee start
 		for (int i = 0; i != 12; ++i) {
-			if (i == my_player) {
-				st.players[i].controller = player_t::controller_occupied;
-				st.players[i].race = my_race;
-				game_load.setup_info.create_melee_units_for_player[i] = true;
-			} else {
-				st.players[i].controller = player_t::controller_inactive;
-				game_load.setup_info.create_melee_units_for_player[i] = false;
-			}
+			st.players[i].controller = player_t::controller_inactive;
+			game_load.setup_info.create_melee_units_for_player[i] = false;
+		}
+		for (size_t k = 0; k != n; ++k) {
+			int i = slots[k].slot;
+			if (i < 0 || i >= 12) continue;
+			st.players[i].controller = player_t::controller_occupied;
+			st.players[i].race = slots[k].race;
+			game_load.setup_info.create_melee_units_for_player[i] = true;
 		}
 	});
+}
+
+template<typename load_data_file_F>
+void setup_melee(state& st, load_data_file_F&& load_data_file, int my_player, race_t my_race) {
+	mp_slot s{my_player, my_race};
+	setup_melee_slots(st, std::forward<load_data_file_F>(load_data_file), &s, 1);
 }
 
 // Desync probe: folds the whole visible sim state into one value. Peers compare it

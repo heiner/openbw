@@ -227,7 +227,10 @@ function wireInput(canvas, x) {
 // ---------------------------------------------------------------------------
 // Boot
 // ---------------------------------------------------------------------------
-async function boot(race) {
+// session: { slots: [{slot, race}], mySlot, link, delay }
+// Single-player is one slot with no link and zero delay; 1v1 is two slots, a PeerLink,
+// and a few frames of input delay. Both peers must pass an identical `slots` list.
+async function boot(session) {
   // Create the audio context now — inside the race-button click gesture — so the
   // browser's autoplay policy doesn't leave it suspended; resume on later input too.
   const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -359,7 +362,17 @@ async function boot(race) {
   const winSize = () => [Math.max(320, window.innerWidth | 0), Math.max(240, window.innerHeight | 0)];
 
   x._initialize();
-  x.openbw_init(...winSize(), race, 0);
+  const { slots, mySlot, link = null, delay = 0 } = session;
+  if (slots.length > 1) {
+    // Hand the slot list to the wasm as int32 [slot, race] pairs via the scratch buffer.
+    const pairs = new Int32Array(slots.length * 2);
+    slots.forEach((s, i) => { pairs[2 * i] = s.slot; pairs[2 * i + 1] = s.race; });
+    const p = x.openbw_in_ptr(pairs.byteLength);
+    new Uint8Array(memory.buffer, p, pairs.byteLength).set(new Uint8Array(pairs.buffer));
+    x.openbw_init_mp(...winSize(), mySlot, slots.length);
+  } else {
+    x.openbw_init(...winSize(), slots[0].race, slots[0].slot);
+  }
   wireInput(canvas, x);
 
   // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
@@ -400,7 +413,7 @@ async function boot(race) {
   // backlog — while letting the interval change on the fly for the speed control. rAF is
   // paused while hidden, so we simply don't render then. Pausing just skips the step;
   // rendering and input keep running, so you can still look around and give orders.
-  let paused = false, stepMs = 42;   // 42 ms ≈ 24 Hz "fastest" game speed
+  let paused = false, waiting = false, stepMs = 42;   // 42 ms ≈ 24 Hz "fastest" game speed
   try { stepMs = +localStorage.getItem('openbw-speed') || 42; } catch {}
 
   // Local input is serialised to BW command bytes rather than applied directly; the
@@ -408,25 +421,134 @@ async function boot(race) {
   // stepping. Single-player is just a one-player session with zero input delay, so solo
   // play runs the exact code path multiplayer will — versioned by net.js's BUILD query so
   // a deploy can't pair a fresh openbw.js with a stale net.js.
-  const MY_SLOT = 0;
   const { Lockstep } = await import('./net.js?v=' + BUILD);
-  const lockstep = new Lockstep({ x, memory, slots: [MY_SLOT], localSlot: MY_SLOT, delay: 0 });
+  const lockstep = new Lockstep({
+    x, memory,
+    slots: slots.map((s) => s.slot),
+    localSlot: mySlot,
+    delay,
+    send: (msg) => { if (link && msg.t === 'turn') link.sendTurn(msg.f, msg.d); },
+  });
+  let dropped = null;   // set when the peer is gone; the game then continues solo
+  if (link) {
+    const peerSlot = slots.find((s) => s.slot !== mySlot).slot;
+    link.frameOf = () => lockstep.frame;
 
-  let stepTimer;
+    // The host is the authority: a peer sending turns for illegal frames, or whose sim has
+    // diverged, is dropped rather than allowed to stall or corrupt the game.
+    const kick = (why) => {
+      if (dropped) return;
+      dropped = why;
+      console.warn('[mp] dropping peer:', why);
+      if (session.isHost) link.sendControl({ t: 'kick', why });
+      lockstep.dropSlot(peerSlot);
+      link.close();
+      setBanner(`Opponent dropped: ${why}`, 2600);
+    };
+
+    // setTurnHandler (not a plain assignment) so turns that arrived while we were still
+    // loading get replayed instead of dropped — they are never retransmitted.
+    link.setTurnHandler((frame, bytes) => {
+      const r = lockstep.receiveTurn(peerSlot, frame, bytes);
+      if (!r.ok && session.isHost) kick(r.why);
+      else if (!r.ok) console.warn('[mp] bad turn from host:', r.why);
+    });
+
+    // Periodic desync probe: both peers hash their sim at the same frames and compare.
+    link.onControl = (msg) => {
+      if (msg.t === 'kick') {
+        dropped = msg.why || 'kicked';
+        setBanner(`Disconnected: ${dropped}`, 0);
+        return;
+      }
+      if (msg.t !== 'sum') return;
+      const mine = mySums.get(msg.f);
+      if (mine === undefined) { peerSums.set(msg.f, msg.h); return; }
+      mySums.delete(msg.f);
+      if (mine !== msg.h && session.isHost) kick(`desync at frame ${msg.f}`);
+      else if (mine !== msg.h) setBanner('Desynced from host', 0);
+    };
+  }
+  const mySums = new Map(), peerSums = new Map();
+  const SUM_EVERY = 240;   // ~10 s at "fastest"
+  if (DEV) window.__bw = { x, memory, lockstep, link };   // dev-only debugging handle
+
+  // Pace the sim off wall-clock instead of one frame per timer tick, so a hiccup is made
+  // up rather than permanently lost. Frames are never skipped — lockstep requires every
+  // peer to simulate every frame in order — we only choose when to run them, so
+  // determinism is unaffected. The debt is capped so a long stall resumes promptly
+  // instead of fast-forwarding for ages.
+  //
+  // NOTE: this does NOT rescue a backgrounded tab. Browsers throttle hidden-tab timers to
+  // ~1 Hz, and lockstep deliberately never lets a peer run more than `delay` frames ahead
+  // of the other, so a hidden peer can only burst ~delay frames per wake-up (~5 fps at
+  // delay 4) and drags its opponent down with it. That bound is the correctness property,
+  // not a bug; raising `delay` trades input lag for it. In real play both windows are
+  // visible and this never applies — but two tabs in one window will crawl.
+  const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000;
+  let stepTimer, stepClock = performance.now(), lastProgress = performance.now();
   const stepLoop = () => {
-    if (!paused) lockstep.tick();
-    stepTimer = setTimeout(stepLoop, stepMs);
+    if (!paused) {
+      const now = performance.now();
+      if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
+      let budget = Math.min(Math.floor((now - stepClock) / stepMs), MAX_CATCHUP);
+      let advanced = 0;
+      while (budget-- > 0 && lockstep.tick()) advanced++;
+      stepClock += advanced * stepMs;      // only consume the time we actually simulated
+      const stepped = advanced > 0;
+      if (stepped) lastProgress = now;
+      // Hysteresis: only claim we're waiting after a sustained gap with no progress.
+      // Reacting to a single late turn made the banner flicker.
+      waiting = !!link && !dropped && (now - lastProgress) > 1500;
+      updateBanner();
+      // Desync probe: both peers hash the same frames and compare. Sampled after the step,
+      // so both label it with the same post-step frame number.
+      if (stepped && link && !dropped && lockstep.frame % SUM_EVERY === 0) {
+        const h = x.openbw_checksum() >>> 0;
+        const peer = peerSums.get(lockstep.frame);
+        if (peer === undefined) mySums.set(lockstep.frame, h);
+        else {
+          peerSums.delete(lockstep.frame);
+          if (peer !== h) {
+            if (session.isHost) { console.warn('[mp] desync', lockstep.frame, h, peer); }
+            setBanner('Desync detected', 0);
+          }
+        }
+        link.sendControl({ t: 'sum', f: lockstep.frame, h });
+      }
+    }
+    // Tick faster than the frame interval so catch-up stays responsive; the loop itself
+    // decides how many frames are actually due.
+    stepTimer = setTimeout(stepLoop, Math.max(8, stepMs >> 1));
   };
   stepTimer = setTimeout(stepLoop, stepMs);
 
   // Pause/resume, shown like a video player (⏸ while running, ▶ while paused). The
   // ︎ text selector keeps the glyphs monochrome. A big "Paused" banner also shows.
   const pauseBtn = $('pausebtn'), pausedEl = $('paused');
+  const pausedSpan = pausedEl.querySelector('span');
   pauseBtn.style.display = 'block';
+  // One centre banner serves every state: an explicit message (disconnect/desync) wins,
+  // otherwise paused, otherwise blocked waiting on a peer's turn.
+  let bannerText = null, bannerOverride = '', bannerTimer = 0;
+  const updateBanner = () => {
+    const t = bannerOverride || (paused ? 'Paused' : waiting ? 'Waiting for opponent…' : '');
+    if (t === bannerText) return;
+    bannerText = t;
+    pausedSpan.textContent = t;
+    pausedEl.style.display = t ? 'flex' : 'none';
+  };
+  // ms = 0 keeps it up permanently (a fatal state); otherwise it clears itself.
+  const setBanner = (t, ms) => {
+    bannerOverride = t;
+    clearTimeout(bannerTimer);
+    if (ms) bannerTimer = setTimeout(() => { bannerOverride = ''; updateBanner(); }, ms);
+    updateBanner();
+  };
   const applyPause = () => {
     pauseBtn.textContent = paused ? '▶︎' : '⏸︎';
     pauseBtn.title = paused ? 'Resume' : 'Pause';
-    pausedEl.style.display = paused ? 'flex' : 'none';
+    updateBanner();
   };
   pauseBtn.onclick = () => { paused = !paused; applyPause(); };
   applyPause();
@@ -656,9 +778,112 @@ setMsg('Choose a race to begin.');
 if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
     (window.matchMedia && matchMedia('(pointer: coarse)').matches))
   $('mobilewarn').style.display = 'block';
-for (const b of document.querySelectorAll('#controls button')) {
+// Only the race buttons start a solo game — the multiplayer panel lives in #controls too.
+for (const b of document.querySelectorAll('#controls button[data-race]')) {
   b.addEventListener('click', () => {
     $('controls').style.display = 'none';
-    boot(+b.dataset.race).catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
+    boot({ slots: [{ slot: 0, race: +b.dataset.race }], mySlot: 0 })
+      .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
   }, { once: true });
+}
+
+// --- multiplayer: 1v1 over a copy-paste WebRTC link (direct-cable style) ------------
+// The host makes an offer, the joiner pastes it and returns an answer, the host pastes
+// that back. No signalling server is involved. Once the channel opens the host is
+// authoritative for the slot list, so both peers init from identical settings.
+const MP_DELAY = 4;   // input delay in frames (~170 ms at "fastest")
+const mp = {
+  race: $('mp-race'), host: $('mp-host'), join: $('mp-join'), panel: $('mp-panel'),
+  out: $('mp-out'), copy: $('mp-copy'), inp: $('mp-in'), go: $('mp-go'),
+  status: $('mp-status'), hint: $('mp-hint'), hint2: $('mp-hint2'),
+};
+const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className = cls; };
+let mpLink = null, mpRole = null, mpPeerRace = null;
+
+const mpBoot = (slots, mySlot) => {
+  $('controls').style.display = 'none';
+  boot({ slots, mySlot, link: mpLink, delay: MP_DELAY, isHost: mpRole === 'host' })
+    .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
+};
+
+const mpNet = () => import('./net.js?v=' + BUILD);
+
+function mpNewLink(net, onOpen) {
+  return new net.PeerLink({
+    onOpen,
+    onControl: (msg) => {
+      // The host tells the joiner the authoritative slot list and which slot it owns.
+      if (msg.t === 'start') mpBoot(msg.slots, msg.you);
+    },
+    onClose: (why) => mpSay('Connection ' + why + '.', 'err'),
+  });
+}
+
+mp.host.onclick = async () => {
+  try {
+    const net = await mpNet();
+    mpRole = 'host';
+    mp.host.disabled = mp.join.disabled = true;
+    mpSay('Generating invite (gathering network candidates)…');
+    mpLink = mpNewLink(net, () => {
+      const slots = [{ slot: 0, race: +mp.race.value }, { slot: 1, race: mpPeerRace }];
+      mpLink.sendControl({ t: 'start', slots, you: 1 });
+      mpBoot(slots, 0);
+    });
+    const code = await mpLink.createOffer({ race: +mp.race.value });
+    const url = location.origin + location.pathname + '#i=' + code;
+    const fits = code.length <= net.MAX_URL_CODE;
+    mp.panel.style.display = 'block';
+    mp.hint.textContent = fits ? '1. Send this link to your friend:'
+                               : '1. Send this invite code to your friend:';
+    mp.out.value = fits ? url : code;
+    mp.hint2.textContent = '2. Paste the response they send back, then press Continue.';
+    mpSay('Waiting for their response…');
+  } catch (e) { mpSay(e.message, 'err'); console.error(e); }
+};
+
+mp.join.onclick = () => {
+  mpRole = 'join';
+  mp.host.disabled = mp.join.disabled = true;
+  mp.panel.style.display = 'block';
+  mp.hint.textContent = '';
+  mp.out.value = '';
+  mp.hint2.textContent = '1. Paste the invite link or code from the host, then press Continue.';
+  mpSay('');
+};
+
+mp.go.onclick = async () => {
+  try {
+    const net = await mpNet();
+    if (mpRole === 'host') {
+      const info = await mpLink.acceptAnswer(mp.inp.value);
+      mpPeerRace = info.race;
+      mpSay('Response accepted — connecting…');
+      return;
+    }
+    if (mpRole !== 'join') return;
+    let code = mp.inp.value.trim();
+    const at = code.indexOf('#i=');
+    if (at >= 0) code = code.slice(at + 3);       // accept a pasted link or a bare code
+    if (!code) { mpSay('Paste the invite from the host first.', 'err'); return; }
+    if (!mpLink) mpLink = mpNewLink(net, () => mpSay('Connected — waiting for the host to start…', 'ok'));
+    const { answer } = await mpLink.acceptOffer(code, { race: +mp.race.value });
+    mp.hint.textContent = '2. Send this response back to the host:';
+    mp.out.value = answer;
+    mp.hint2.textContent = '';
+    mp.inp.value = '';
+    mpSay('Waiting for the host to accept…');
+  } catch (e) { mpSay(e.message, 'err'); console.error(e); }
+};
+
+mp.copy.onclick = async () => {
+  try { await navigator.clipboard.writeText(mp.out.value); mpSay('Copied to clipboard.', 'ok'); }
+  catch { mp.out.select(); mpSay('Press Cmd/Ctrl+C to copy.'); }
+};
+
+// Arriving from an invite link: jump straight to the join flow with the code prefilled.
+if (location.hash.startsWith('#i=')) {
+  mp.join.click();
+  mp.inp.value = location.hash.slice(3);
+  mpSay('Invite loaded — pick your race, then press Continue.');
 }

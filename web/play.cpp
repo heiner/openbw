@@ -154,6 +154,7 @@ int run_nettest(const char* data_dir, const char* map_file, int my_player, race_
 	sa.current_minerals[my_player] = 1000;
 	sb.current_minerals[my_player] = 1000;
 	const int units0 = count_units(sa, my_player);
+	const unsigned sum0 = sim_checksum(sa);   // baseline, for the liveness check below
 
 	int failures = 0;
 	// Equality alone would also pass if a command were a no-op on *both* sims, so log the
@@ -226,16 +227,18 @@ int run_nettest(const char* data_dir, const char* map_file, int my_player, race_
 		}
 	}
 	// Liveness: if the commands had all been silently dropped, both sims would still match.
-	// Spending minerals and gaining units proves the stream actually did something.
+	// Spending minerals and moving the sim off its initial state proves otherwise. Don't
+	// assert on unit count — Zerg morphs larva->egg->unit without growing it, so that
+	// signal is race- and frame-count dependent.
 	if ((int)sa.current_minerals[my_player] >= 1000) {
 		ui::log("nettest: LIVENESS FAILED - no minerals spent, commands did nothing\n");
 		++failures;
 	}
-	if (count_units(sa, my_player) <= units0) {
-		ui::log("nettest: LIVENESS FAILED - unit count never grew (%d -> %d)\n",
-		        units0, count_units(sa, my_player));
+	if (sim_checksum(sa) == sum0) {
+		ui::log("nettest: LIVENESS FAILED - sim state never changed\n");
 		++failures;
 	}
+	ui::log("nettest: units %d -> %d\n", units0, count_units(sa, my_player));
 	ui::log("nettest: %s (%d frames, checksum %08x)\n",
 	        failures ? "FAILED" : "OK", frames, sim_checksum(sa));
 	return failures ? 1 : 0;

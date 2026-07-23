@@ -113,6 +113,19 @@
     justify-content: center; pointer-events: none; }
   #paused span { font: 800 clamp(32px, 7vw, 68px) system-ui, sans-serif; letter-spacing: 3px;
     color: #e2e8f0; text-shadow: 0 2px 18px rgba(0,0,0,.9), 0 0 3px rgba(0,0,0,.95); }
+  #mp { margin-top: 18px; padding-top: 14px; border-top: 1px solid #1e293b; text-align: left; }
+  #mp h2 { font-size: 13px; margin: 0 0 8px; color: #94a3b8; font-weight: 600; text-align: center; }
+  #mp .row { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 8px 0; }
+  #mp select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;
+    padding: 4px 8px; font: inherit; cursor: pointer; }
+  #mp textarea { width: 100%; box-sizing: border-box; height: 62px; resize: vertical; margin: 6px 0;
+    background: #0b1220; color: #cbd5e1; border: 1px solid #334155; border-radius: 6px;
+    padding: 6px 8px; font: 11px/1.4 ui-monospace, Menlo, monospace; word-break: break-all; }
+  #mp button { margin-top: 0; }
+  #mp .hint { margin: 4px 0; font-size: 12px; color: #64748b; text-align: left; }
+  #mp-status { margin-top: 8px; font-size: 12px; color: #94a3b8; min-height: 1.4em; }
+  #mp-status.err { color: #f87171; }
+  #mp-status.ok { color: #4ade80; }
   #toast { position: fixed; top: 54px; left: 50%; transform: translate(-50%, -8px); z-index: 8;
     padding: 8px 16px; border-radius: 8px; background: rgba(122,26,26,.94); color: #fee2e2;
     font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
@@ -170,6 +183,33 @@
       <button data-race="0">Zerg</button>
       <button data-race="2">Protoss</button>
     </p>
+    <div id="mp">
+      <h2>or play a friend (1v1)</h2>
+      <div class="row">
+        <label>Your race
+          <select id="mp-race">
+            <option value="1">Terran</option>
+            <option value="0">Zerg</option>
+            <option value="2">Protoss</option>
+          </select>
+        </label>
+        <button id="mp-host">Host</button>
+        <button id="mp-join">Join</button>
+      </div>
+      <div id="mp-panel" style="display:none">
+        <div class="hint" id="mp-hint"></div>
+        <textarea id="mp-out" readonly></textarea>
+        <div class="row">
+          <button id="mp-copy">Copy</button>
+        </div>
+        <div class="hint" id="mp-hint2"></div>
+        <textarea id="mp-in" placeholder="Paste the code from the other player here"></textarea>
+        <div class="row">
+          <button id="mp-go">Continue</button>
+        </div>
+      </div>
+      <div id="mp-status"></div>
+    </div>
   </div>
 </div></div>
 
