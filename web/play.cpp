@@ -130,6 +130,110 @@ void script_econ_demo(play_ui& ui) {
 		try_build_near(ui, p, ui.kit, w, st.game->start_locations[p]);
 }
 
+// Lockstep foundation test. Two sims run from the same map and seed: sim A is driven
+// through the BW command-byte writer (the multiplayer path), sim B through direct
+// action_* calls (the path the UI used before). Identical checksums prove the
+// serialisation round-trips exactly — a wrong payload layout diverges immediately —
+// and that stepping both from the same stream stays deterministic.
+int run_nettest(const char* data_dir, const char* map_file, int my_player, race_t my_race, int frames) {
+	auto load = data_loading::data_files_directory(data_dir);
+	game_player pa(load), pb(load);
+	{ data_loading::mpq_file<> m(map_file); setup_melee(pa.st(), m, my_player, my_race); }
+	{ data_loading::mpq_file<> m(map_file); setup_melee(pb.st(), m, my_player, my_race); }
+	state& sa = pa.st(); state& sb = pb.st();
+	action_state asa, asb;
+	action_functions afa(sa, asa), afb(sb, asb);
+	build_kit kit = kit_for(my_race);
+	sa.current_minerals[my_player] = 1000;
+	sb.current_minerals[my_player] = 1000;
+	const int units0 = count_units(sa, my_player);
+
+	int failures = 0;
+	// Equality alone would also pass if a command were a no-op on *both* sims, so log the
+	// observable state too and assert liveness at the end.
+	auto check = [&](const char* what) {
+		unsigned ca = sim_checksum(sa), cb = sim_checksum(sb);
+		ui::log("nettest: %-20s cmd=%08x direct=%08x  min=%d/%d units=%d/%d  %s\n",
+		        what, ca, cb,
+		        (int)sa.current_minerals[my_player], (int)sb.current_minerals[my_player],
+		        count_units(sa, my_player), count_units(sb, my_player),
+		        ca == cb ? "ok" : "MISMATCH");
+		if (ca != cb) ++failures;
+	};
+
+	a_vector<uint8_t> buf;
+	bw_cmd w(buf);
+	auto flush = [&]() { apply_bw_commands(afa, my_player, buf.data(), buf.size()); buf.clear(); };
+
+	// --- train (or morph) a worker from the town hall: opcodes 9 + 31/35 ---
+	UnitTypes townhall = my_race == race_t::zerg ? UnitTypes::Zerg_Larva
+	                   : my_race == race_t::protoss ? UnitTypes::Protoss_Nexus
+	                                                : UnitTypes::Terran_Command_Center;
+	unit_t* ta = find_unit_of_type(sa, my_player, townhall);
+	unit_t* tb = find_unit_of_type(sb, my_player, townhall);
+	if (ta && tb) {
+		uint16_t id = afa.get_unit_id(ta).raw_value;
+		w.select(&id, 1);
+		w.type(my_race == race_t::zerg ? 35 : 31, kit.worker);
+		flush();
+		afb.action_select(my_player, tb);
+		if (my_race == race_t::zerg) afb.action_morph(my_player, afb.get_unit_type(kit.worker));
+		else afb.action_train(my_player, afb.get_unit_type(kit.worker));
+		check("train worker");
+	}
+
+	// --- move a worker: opcodes 9 + 20 (default order, position target) ---
+	unit_t* wa = find_unit_of_type(sa, my_player, kit.worker);
+	unit_t* wb = find_unit_of_type(sb, my_player, kit.worker);
+	if (wa && wb) {
+		uint16_t id = afa.get_unit_id(wa).raw_value;
+		xy dest = wa->sprite->position + xy(96, 96);
+		w.select(&id, 1); w.default_order(dest, 0, false); flush();
+		afb.action_select(my_player, wb);
+		afb.action_default_order(my_player, dest, nullptr, nullptr, false);
+		check("worker move order");
+	}
+
+	// --- place a supply building: opcodes 9 + 12 ---
+	if (wa && wb) {
+		int tx = wa->sprite->position.x / 32 + 4, ty = wa->sprite->position.y / 32;
+		uint16_t id = afa.get_unit_id(wa).raw_value;
+		w.select(&id, 1); w.build(kit.build_order, kit.supply, tx, ty); flush();
+		afb.action_select(my_player, wb);
+		afb.action_build(my_player, afb.get_order_type(kit.build_order),
+		                 afb.get_unit_type(kit.supply), {(size_t)tx, (size_t)ty});
+		check("build supply");
+	}
+
+	// --- stop / hold: opcodes 26 / 43 ---
+	w.queued(26, false); flush(); afb.action_stop(my_player, false);          check("stop");
+	w.queued(43, false); flush(); afb.action_hold_position(my_player, false); check("hold position");
+
+	// --- step both sims and confirm they never drift ---
+	for (int i = 0; i != frames; ++i) {
+		pa.next_frame(); pb.next_frame();
+		if (sim_checksum(sa) != sim_checksum(sb)) {
+			ui::log("nettest: DIVERGED at frame %d\n", (int)sa.current_frame);
+			++failures;
+			break;
+		}
+	}
+	// Liveness: if the commands had all been silently dropped, both sims would still match.
+	// Spending minerals and gaining units proves the stream actually did something.
+	if ((int)sa.current_minerals[my_player] >= 1000) {
+		ui::log("nettest: LIVENESS FAILED - no minerals spent, commands did nothing\n");
+		++failures;
+	}
+	if (count_units(sa, my_player) <= units0) {
+		ui::log("nettest: LIVENESS FAILED - unit count never grew (%d -> %d)\n",
+		        units0, count_units(sa, my_player));
+		++failures;
+	}
+	ui::log("nettest: %s (%d frames, checksum %08x)\n",
+	        failures ? "FAILED" : "OK", frames, sim_checksum(sa));
+	return failures ? 1 : 0;
+}
+
 // Headless render: build the game, warm it up a few frames, render one frame
 // into an in-memory RGBA surface (no window/display needed) and dump it as a
 // binary PPM. Proves the whole data->map->sprite->pixel pipeline off-screen.
@@ -243,6 +347,9 @@ int main(int argc, char** argv) {
 	}
 
 	if (getenv("OPENBW_SELFTEST")) return run_selftest(data_dir, map_file, my_player, my_race);
+
+	const char* nettest = getenv("OPENBW_NETTEST");
+	if (nettest) return run_nettest(data_dir, map_file, my_player, my_race, atoi(nettest));
 
 	const char* shot = getenv("OPENBW_SCREENSHOT");
 	if (shot) {

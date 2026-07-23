@@ -402,8 +402,29 @@ async function boot(race) {
   // rendering and input keep running, so you can still look around and give orders.
   let paused = false, stepMs = 42;   // 42 ms ≈ 24 Hz "fastest" game speed
   try { stepMs = +localStorage.getItem('openbw-speed') || 42; } catch {}
+
+  // Local input is serialised to BW command bytes rather than applied directly; drain and
+  // apply them just before each step. Single-player is a one-player session with zero input
+  // delay. Multiplayer will schedule these N frames ahead and interleave every peer's batch
+  // here instead — the sim path is identical, which is what keeps peers in lockstep.
+  // Order matters: copy the outgoing bytes out *before* openbw_in_ptr(), which can grow
+  // wasm memory and detach any existing view.
+  const MY_SLOT = 0;
+  const pumpCommands = () => {
+    const len = x.openbw_out_len();
+    if (!len) return;
+    const src = new Uint8Array(memory.buffer, x.openbw_out_ptr(), len).slice();
+    x.openbw_out_clear();
+    const dst = x.openbw_in_ptr(len);
+    new Uint8Array(memory.buffer, dst, len).set(src);
+    x.openbw_apply(MY_SLOT, len);
+  };
+
   let stepTimer;
-  const stepLoop = () => { if (!paused) x.openbw_step(); stepTimer = setTimeout(stepLoop, stepMs); };
+  const stepLoop = () => {
+    if (!paused) { pumpCommands(); x.openbw_step(); }
+    stepTimer = setTimeout(stepLoop, stepMs);
+  };
   stepTimer = setTimeout(stepLoop, stepMs);
 
   // Pause/resume, shown like a video player (⏸ while running, ▶ while paused). The

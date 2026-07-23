@@ -174,3 +174,37 @@ OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->canc
 OPENBW_EXPORT(openbw_set_order_lines) void openbw_set_order_lines(int on) {
 	if (g_ui) g_ui->show_order_lines = on != 0;
 }
+
+// --- deterministic command stream (lockstep multiplayer) --------------------
+// Local input is serialised to BW command bytes rather than applied directly. The host
+// drains them each frame, schedules them for a later frame, ships them to peers, and every
+// peer applies the identical stream via openbw_apply — keeping all sims bit-identical.
+// The buffer holds framed records: [u16 len][opcode][payload].
+
+OPENBW_EXPORT(openbw_out_ptr) const uint8_t* openbw_out_ptr() {
+	return g_ui && !g_ui->outgoing.empty() ? g_ui->outgoing.data() : nullptr;
+}
+OPENBW_EXPORT(openbw_out_len) int openbw_out_len() { return g_ui ? (int)g_ui->outgoing.size() : 0; }
+OPENBW_EXPORT(openbw_out_clear) void openbw_out_clear() { if (g_ui) g_ui->outgoing.clear(); }
+
+// Scratch buffer the host writes a peer's batch into before calling openbw_apply.
+namespace { a_vector<uint8_t> g_inbuf; }
+OPENBW_EXPORT(openbw_in_ptr) uint8_t* openbw_in_ptr(int len) {
+	if (len < 0) len = 0;
+	g_inbuf.resize((size_t)len);
+	return g_inbuf.empty() ? nullptr : g_inbuf.data();
+}
+// Apply `len` bytes of framed commands as `owner`. Must be called on every peer for every
+// player, in the same order, on the same frame.
+OPENBW_EXPORT(openbw_apply) void openbw_apply(int owner, int len) {
+	if (g_ui && len > 0 && (size_t)len <= g_inbuf.size())
+		g_ui->apply_commands(owner, g_inbuf.data(), (size_t)len);
+}
+
+OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
+
+// Desync probe (shared implementation in sandbox.h, so native and wasm can't disagree).
+// Peers compare it periodically; any divergence means the sims have drifted.
+OPENBW_EXPORT(openbw_checksum) unsigned openbw_checksum() {
+	return g_ui ? sim_checksum(g_ui->st) : 0;
+}

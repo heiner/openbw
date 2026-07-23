@@ -47,6 +47,31 @@ void setup_melee(state& st, load_data_file_F&& load_data_file, int my_player, ra
 	});
 }
 
+// Desync probe: folds the whole visible sim state into one value. Peers compare it
+// periodically; any divergence means the sims have drifted and lockstep is broken.
+// Must stay coarse enough to be cheap but fine enough to catch real drift — per-unit
+// position/hp/order are what actually diverge, so economy counters alone are not enough.
+// Single definition shared by the native test and the wasm export so they can't disagree.
+inline unsigned sim_checksum(state& st) {
+	unsigned h = 2166136261u;
+	auto mix = [&h](unsigned v) { h = (h ^ v) * 16777619u; };
+	mix((unsigned)st.current_frame);
+	mix(st.lcg_rand_state);
+	for (int i = 0; i != 12; ++i) {
+		if (st.players[i].controller != player_t::controller_occupied) continue;
+		mix((unsigned)st.current_minerals[i]);
+		mix((unsigned)st.current_gas[i]);
+		for (unit_t* u : ptr(st.player_units[i])) {
+			mix((unsigned)u->index);
+			mix((unsigned)u->sprite->position.x);
+			mix((unsigned)u->sprite->position.y);
+			mix((unsigned)u->hp.raw_value);
+			mix((unsigned)(u->order_type ? (int)u->order_type->id : 0xffff));
+		}
+	}
+	return h;
+}
+
 inline int count_units(state& st, int owner) {
 	int n = 0;
 	for (unit_t* u : ptr(st.player_units.at(owner))) { (void)u; ++n; }
@@ -92,6 +117,56 @@ inline build_kit kit_for(race_t race) {
 // Select `worker` and search outward from `start` for a buildable tile, placing
 // the kit's production building there. Returns true if a spot was found. `af`
 // is any action_functions (native play_ui or a bare action_functions).
+// BW command-byte writer. Emits framed records into `out`: [u16 len][u8 opcode][payload],
+// little-endian, with payload layouts mirroring the matching read_action_* in actions.h.
+// A null unit target serialises as id 0 (real ids are index+1) and "no unit type" as
+// UnitTypes::None; both read back as nullptr.
+//
+// NOTE: this is a wire format shared between peers — bump PROTOCOL in web/net.js on any
+// change here, or mismatched builds will desync instead of failing cleanly.
+struct bw_cmd {
+	a_vector<uint8_t>& out;
+	a_vector<uint8_t> pend;
+	explicit bw_cmd(a_vector<uint8_t>& out) : out(out) {}
+
+	void begin(int op) { pend.clear(); pend.push_back((uint8_t)op); }
+	void u8(int x) { pend.push_back((uint8_t)x); }
+	void u16(int x) { pend.push_back((uint8_t)(x & 0xff)); pend.push_back((uint8_t)((x >> 8) & 0xff)); }
+	void end() {
+		size_t n = pend.size();
+		out.push_back((uint8_t)(n & 0xff));
+		out.push_back((uint8_t)((n >> 8) & 0xff));
+		out.insert(out.end(), pend.begin(), pend.end());
+	}
+
+	void select(const uint16_t* ids, size_t n) { begin(9); u8((int)n); for (size_t i = 0; i != n; ++i) u16(ids[i]); end(); }
+	void build(Orders o, UnitTypes t, int tx, int ty) { begin(12); u8((int)o); u16(tx); u16(ty); u16((int)t); end(); }
+	void default_order(xy pos, uint16_t target, bool q) {
+		begin(20); u16(pos.x); u16(pos.y); u16(target); u16((int)UnitTypes::None); u8(q ? 1 : 0); end();
+	}
+	void order(Orders o, xy pos, uint16_t target, bool q) {
+		begin(21); u16(pos.x); u16(pos.y); u16(target); u16((int)UnitTypes::None); u8((int)o); u8(q ? 1 : 0); end();
+	}
+	void bare(int op) { begin(op); end(); }                         // 49 cancel research, 51 cancel upgrade, 54 stim
+	void queued(int op, bool q) { begin(op); u8(q ? 1 : 0); end(); } // 26 stop, 43 hold, 38 siege, 37 unsiege
+	void type(int op, UnitTypes t) { begin(op); u16((int)t); end(); }// 31 train, 35 morph, 53 morph building
+	void id8(int op, int v) { begin(op); u8(v); end(); }             // 48 research, 50 upgrade
+	void cancel_slot(int slot) { begin(32); u16(slot); end(); }      // 32 cancel build queue
+};
+
+// Apply one player's framed batch, in order, through the engine's action reader.
+template<typename action_functions_T>
+void apply_bw_commands(action_functions_T& af, int owner, const uint8_t* data, size_t size) {
+	size_t i = 0;
+	while (i + 2 <= size) {
+		size_t n = (size_t)data[i] | ((size_t)data[i + 1] << 8);
+		i += 2;
+		if (n == 0 || i + n > size) break;
+		af.read_action(owner, data + i, n);
+		i += n;
+	}
+}
+
 template<typename action_functions_T>
 bool try_build_near(action_functions_T& af, int owner, const build_kit& kit, unit_t* worker, xy start) {
 	const unit_type_t* bt = af.get_unit_type(kit.production);
@@ -223,16 +298,41 @@ struct play_ui : ui_functions {
 		last_recalled_group = n;
 	}
 
-	// Push the UI's visual selection into the sim's per-player action selection,
-	// capped to BW's 12-unit limit (action_select errors past 12), own units only.
+	// ---- deterministic command stream --------------------------------------------
+	// Every action leaves as BW command bytes (see bw_cmd) and is applied through
+	// read_action() — the same path replays use — so all peers apply an identical stream
+	// and stay in lockstep. Single-player is just a one-player session with zero input
+	// delay, so this path is always exercised.
+	a_vector<uint8_t> outgoing;   // framed records drained by the host each frame
+	bw_cmd cmds{outgoing};
+
+	void cmd_build(Orders o, const unit_type_t* t, int tx, int ty) { cmds.build(o, t->id, tx, ty); }
+	void cmd_default_order(xy pos, unit_t* target, bool q) {
+		cmds.default_order(pos, get_unit_id(target).raw_value, q);
+	}
+	void cmd_order(Orders o, xy pos, unit_t* target, bool q) {
+		cmds.order(o, pos, get_unit_id(target).raw_value, q);
+	}
+	void cmd_bare(int opcode) { cmds.bare(opcode); }
+	void cmd_queued(int opcode, bool q) { cmds.queued(opcode, q); }
+	void cmd_type(int opcode, UnitTypes t) { cmds.type(opcode, t); }
+	void cmd_id8(int opcode, int v) { cmds.id8(opcode, v); }
+	void cmd_cancel_slot(int slot) { cmds.cancel_slot(slot); }
+	void apply_commands(int owner, const uint8_t* data, size_t size) {
+		apply_bw_commands(*this, owner, data, size);
+	}
+
+	// Push the UI's visual selection into the sim's per-player selection, capped to BW's
+	// 12-unit limit, own units only. Emitted as a command so every peer applies the same
+	// selection immediately before whatever order follows it.
 	void sync_selection() {
-		a_vector<unit_t*> units;
+		uint16_t ids[12]; size_t n = 0;
 		for (auto uid : current_selection) {
-			if (units.size() == 12) break;
+			if (n == 12) break;
 			unit_t* u = get_unit(uid);
-			if (u && u->owner == my_player) units.push_back(u);
+			if (u && u->owner == my_player) ids[n++] = get_unit_id(u).raw_value;
 		}
-		action_select(my_player, units);
+		cmds.select(ids, n);
 	}
 
 	unit_t* primary_selected() {
@@ -594,9 +694,9 @@ struct play_ui : ui_functions {
 		if (slot < 0) return;
 		sync_selection();
 		unit_t* u = primary_selected();
-		if (u && u->build_queue.empty() && unit_is_researching(u)) { action_cancel_research(my_player); return; }
-		if (u && u->build_queue.empty() && unit_is_upgrading(u)) { action_cancel_upgrade(my_player); return; }
-		action_cancel_build_queue(my_player, (size_t)slot);
+		if (u && u->build_queue.empty() && unit_is_researching(u)) { cmd_bare(49); return; }
+		if (u && u->build_queue.empty() && unit_is_upgrading(u)) { cmd_bare(51); return; }
+		cmd_cancel_slot(slot);
 	}
 
 	// ---- event feedback (unit-ready / under-attack) ------------------------------
@@ -697,20 +797,20 @@ struct play_ui : ui_functions {
 			case C_PATROL:    start_target(T_PATROL); break;
 			case C_GATHER:    start_target(T_GATHER); break;
 			case C_REPAIR:    start_target(T_REPAIR); break;
-			case C_STOP:      sync_selection(); action_stop(my_player, key_shift()); break;
-			case C_HOLD:      sync_selection(); action_hold_position(my_player, key_shift()); break;
+			case C_STOP:      sync_selection(); cmd_queued(26, key_shift()); break;
+			case C_HOLD:      sync_selection(); cmd_queued(43, key_shift()); break;
 			case C_BUILDMENU: menu = 1; refresh_card(); break;
 			case C_BUILD:     pending_build = get_unit_type(c.ut); menu = 0; refresh_card(); break;
-			case C_TRAIN:     sync_selection(); action_train(my_player, get_unit_type(c.ut)); break;
-			case C_MORPH:     sync_selection(); action_morph(my_player, get_unit_type(c.ut)); break;
-			case C_MORPHBLDG: sync_selection(); action_morph_building(my_player, get_unit_type(c.ut)); break;
+			case C_TRAIN:     sync_selection(); cmd_type(31, c.ut); break;
+			case C_MORPH:     sync_selection(); cmd_type(35, c.ut); break;
+			case C_MORPHBLDG: sync_selection(); cmd_type(53, c.ut); break;
 			case C_SELECT:    select_units_of_type(c.ut); break;
 			case C_RALLY:     start_target(T_RALLY); break;
-			case C_RESEARCH:  sync_selection(); action_research(my_player, get_tech_type(c.tech)); break;
-			case C_UPGRADE:   sync_selection(); action_upgrade(my_player, get_upgrade_type(c.upg)); break;
-			case C_STIM:      sync_selection(); action_stim_pack(my_player); break;
-			case C_SIEGE:     sync_selection(); action_siege(my_player, key_shift()); break;
-			case C_UNSIEGE:   sync_selection(); action_unsiege(my_player, key_shift()); break;
+			case C_RESEARCH:  sync_selection(); cmd_id8(48, (int)c.tech); break;
+			case C_UPGRADE:   sync_selection(); cmd_id8(50, (int)c.upg); break;
+			case C_STIM:      sync_selection(); cmd_bare(54); break;
+			case C_SIEGE:     sync_selection(); cmd_queued(38, key_shift()); break;
+			case C_UNSIEGE:   sync_selection(); cmd_queued(37, key_shift()); break;
 			}
 			return true;
 		}
@@ -736,12 +836,12 @@ struct play_ui : ui_functions {
 		sync_selection();
 		bool q = key_shift();
 		switch (pending_targ) {
-		case T_ATTACK: action_order(my_player, get_order_type(Orders::AttackDefault), pos, target, nullptr, q); break;
-		case T_MOVE:   action_order(my_player, get_order_type(Orders::Move), pos, target, nullptr, q); break;
-		case T_PATROL: action_order(my_player, get_order_type(Orders::Patrol), pos, nullptr, nullptr, q); break;
-		case T_GATHER: action_default_order(my_player, pos, target, nullptr, q); break;
-		case T_REPAIR: action_order(my_player, get_order_type(Orders::Repair), pos, target, nullptr, q); break;
-		case T_RALLY:  action_order(my_player, get_order_type(target ? Orders::RallyPointUnit : Orders::RallyPointTile), pos, target, nullptr, false); break;
+		case T_ATTACK: cmd_order(Orders::AttackDefault, pos, target, q); break;
+		case T_MOVE:   cmd_order(Orders::Move, pos, target, q); break;
+		case T_PATROL: cmd_order(Orders::Patrol, pos, nullptr, q); break;
+		case T_GATHER: cmd_default_order(pos, target, q); break;
+		case T_REPAIR: cmd_order(Orders::Repair, pos, target, q); break;
+		case T_RALLY:  cmd_order(target ? Orders::RallyPointUnit : Orders::RallyPointTile, pos, target, false); break;
 		}
 		if (unit_t* u = primary_selected())
 			play_unit_ack(u, u->unit_type->first_yes_sound, u->unit_type->last_yes_sound);
@@ -771,7 +871,7 @@ struct play_ui : ui_functions {
 		int tx, ty;
 		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
-		action_build(my_player, get_order_type(kit.build_order), pending_build, {(size_t)tx, (size_t)ty});
+		cmd_build(kit.build_order, pending_build, tx, ty);
 		pending_build = nullptr;   // one-shot; re-open the menu to place another
 	}
 
@@ -1053,7 +1153,7 @@ struct play_ui : ui_functions {
 				target = select_get_unit_at(map_pos);
 			}
 			sync_selection();
-			action_default_order(my_player, map_pos, target, nullptr, key_shift());
+			cmd_default_order(map_pos, target, key_shift());
 			if (unit_t* u = primary_selected())
 				play_unit_ack(u, u->unit_type->first_yes_sound, u->unit_type->last_yes_sound);
 			return true;
