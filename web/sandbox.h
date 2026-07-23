@@ -528,6 +528,36 @@ struct play_ui : ui_functions {
 	// engine's own can-build/upgrade/research checks so a button appears as soon as its
 	// prerequisites are met. buildings_only splits the worker's build submenu (which
 	// lists buildings) from a producer's card (units/morphs + upgrades + research).
+	// Canonical original-StarCraft train/morph hotkey per unit (0 = none, fall back to
+	// auto-assign). Keys are collision-free within each production building, matching the
+	// game; sources: Liquipedia. Buildings keep auto-assignment for now — matching those
+	// 1:1 would need splitting the worker Build card into basic/advanced sub-menus.
+	static char bw_train_key(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		case U::Terran_SCV: return 's'; case U::Terran_Marine: return 'm';
+		case U::Terran_Firebat: return 'f'; case U::Terran_Medic: return 'c';
+		case U::Terran_Ghost: return 'g'; case U::Terran_Vulture: return 'v';
+		case U::Terran_Siege_Tank_Tank_Mode: return 't'; case U::Terran_Goliath: return 'g';
+		case U::Terran_Wraith: return 'w'; case U::Terran_Dropship: return 'd';
+		case U::Terran_Science_Vessel: return 'v'; case U::Terran_Battlecruiser: return 'b';
+		case U::Terran_Valkyrie: return 'y';
+		case U::Protoss_Probe: return 'p'; case U::Protoss_Zealot: return 'z';
+		case U::Protoss_Dragoon: return 'd'; case U::Protoss_High_Templar: return 't';
+		case U::Protoss_Dark_Templar: return 'k'; case U::Protoss_Shuttle: return 's';
+		case U::Protoss_Reaver: return 'v'; case U::Protoss_Observer: return 'o';
+		case U::Protoss_Scout: return 's'; case U::Protoss_Carrier: return 'c';
+		case U::Protoss_Arbiter: return 'a'; case U::Protoss_Corsair: return 'o';
+		case U::Zerg_Drone: return 'd'; case U::Zerg_Zergling: return 'z';
+		case U::Zerg_Hydralisk: return 'h'; case U::Zerg_Mutalisk: return 'm';
+		case U::Zerg_Overlord: return 'o'; case U::Zerg_Queen: return 'q';
+		case U::Zerg_Scourge: return 's'; case U::Zerg_Defiler: return 'f';
+		case U::Zerg_Ultralisk: return 'u'; case U::Zerg_Lurker: return 'l';
+		case U::Zerg_Guardian: return 'g'; case U::Zerg_Devourer: return 'd';
+		default: return 0;
+		}
+	}
+
 	void add_producible(unit_t* u, bool buildings_only) {
 		bool worker = ut_worker(u), building = ut_building(u);
 		for (size_t i = 0; i != game_st.unit_types.vec.size(); ++i) {
@@ -537,7 +567,12 @@ struct play_ui : ui_functions {
 			if (buildings_only != tb) continue;
 			cmd_act act = worker ? C_BUILD : building ? (tb ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
 			const char* nm = unit_name((UnitTypes)i);
-			card.push_back({pick_key(nm), nm, act, (UnitTypes)i});
+			// Units get their canonical BW key when it's free on this card; buildings and
+			// any collision fall back to auto-assignment.
+			char k = tb ? 0 : bw_train_key((UnitTypes)i);
+			bool used = false;
+			if (k) for (auto& c : card) if (c.key == k) { used = true; break; }
+			card.push_back({(k && !used) ? k : pick_key(nm), nm, act, (UnitTypes)i});
 		}
 		if (buildings_only) return;
 		for (size_t i = 0; i != game_st.upgrade_types.vec.size(); ++i) {
@@ -586,20 +621,20 @@ struct play_ui : ui_functions {
 		if (id == U::Terran_Marine || id == U::Terran_Firebat)
 			card.push_back({'t', "Stim Pack", C_STIM, U::None});
 		else if (id == U::Terran_Siege_Tank_Tank_Mode || id == U::Terran_Siege_Tank_Tank_Mode_Turret)
-			card.push_back({'e', "Siege Mode", C_SIEGE, U::None});
+			card.push_back({'o', "Siege Mode", C_SIEGE, U::None});
 		else if (id == U::Terran_Siege_Tank_Siege_Mode || id == U::Terran_Siege_Tank_Siege_Mode_Turret)
-			card.push_back({'d', "Tank Mode", C_UNSIEGE, U::None});
+			card.push_back({'o', "Tank Mode", C_UNSIEGE, U::None});
 		// Burrow: Zerg ground units once Burrowing is researched (Lurkers innately).
 		if (ut_can_burrow(u) && (unit_is(u, U::Zerg_Lurker) || player_has_researched(my_player, TechTypes::Burrowing))) {
-			if (u_burrowed(u)) card.push_back({pick_key("Unburrow"), "Unburrow", C_UNBURROW, U::None});
-			else card.push_back({pick_key("Burrow"), "Burrow", C_BURROW, U::None});
+			if (u_burrowed(u)) card.push_back({'u', "Unburrow", C_UNBURROW, U::None});
+			else card.push_back({'u', "Burrow", C_BURROW, U::None});
 		}
 		// Cloak: Wraith / Ghost with the matching tech researched.
 		bool cloakable = (id == U::Terran_Wraith && player_has_researched(my_player, TechTypes::Cloaking_Field)) ||
 		                 (id == U::Terran_Ghost && player_has_researched(my_player, TechTypes::Personnel_Cloaking));
 		if (cloakable) {
-			if (u_cloaked(u)) card.push_back({pick_key("Decloak"), "Decloak", C_DECLOAK, U::None});
-			else card.push_back({pick_key("Cloak"), "Cloak", C_CLOAK, U::None});
+			if (u_cloaked(u)) card.push_back({'c', "Decloak", C_DECLOAK, U::None});
+			else card.push_back({'c', "Cloak", C_CLOAK, U::None});
 		}
 		// Carrier interceptors / Reaver scarabs are built by the unit itself.
 		if (unit_is_carrier(u)) card.push_back({pick_key("Interceptor"), "Build Interceptor", C_FIGHTER, U::Protoss_Interceptor});
