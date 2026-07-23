@@ -163,3 +163,9 @@ OPENBW_EXPORT(openbw_res_icon) const uint8_t* openbw_res_icon(int which) {
 
 // Edge-scroll direction for the cursor: 0 none, 1 N, 2 NE, 3 E, 4 SE, 5 S, 6 SW, 7 W, 8 NW.
 OPENBW_EXPORT(openbw_edge) int openbw_edge() { return g_ui ? g_ui->edge_dir : 0; }
+
+// Last blocked-command reason as "seq\tmessage" — the host shows a toast when seq changes.
+OPENBW_EXPORT(openbw_error) const char* openbw_error() { return g_ui ? g_ui->error_status() : ""; }
+
+// Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
+OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }

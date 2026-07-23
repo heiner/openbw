@@ -60,7 +60,9 @@
   #status:empty { display: none; }
   #status .bar { width: 90px; height: 8px; background: #1e293b; border-radius: 4px; overflow: hidden; }
   #status .bar > i { display: block; height: 100%; background: #38bdf8; }
-  #status .q { background: rgba(30,41,59,.9); border-radius: 5px; padding: 2px 8px; white-space: nowrap; }
+  #status .q { background: rgba(30,41,59,.9); border-radius: 5px; padding: 2px 8px; white-space: nowrap;
+    pointer-events: auto; cursor: pointer; }
+  #status .q:hover { background: rgba(120,30,30,.92); color: #fee2e2; }   /* click to cancel */
   #status .q.cur { color: #e2e8f0; font-weight: 600; }
   #resources { position: fixed; top: 8px; right: 12px; display: flex; gap: 16px; align-items: center;
     padding: 5px 12px; border-radius: 8px; background: rgba(0,0,0,.5);
@@ -91,6 +93,11 @@
   #help h3 { margin: 0 0 8px; font-size: 13px; color: #e2e8f0; }
   #help .row { margin: 4px 0; }
   #help kbd { background:#1e293b; border-radius:3px; padding:1px 5px; color:#cbd5e1; }
+  #toast { position: fixed; top: 54px; left: 50%; transform: translate(-50%, -8px); z-index: 8;
+    padding: 8px 16px; border-radius: 8px; background: rgba(122,26,26,.94); color: #fee2e2;
+    font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
+  #toast.show { opacity: 1; transform: translate(-50%, 0); }
 </style>
 </head>
 <body>
@@ -109,6 +116,7 @@
 </div>
 <div id="status"></div>
 <div id="card"></div>
+<div id="toast"></div>
 
 <div id="overlay"><div class="card">
   <h1>OpenBW</h1>

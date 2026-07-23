@@ -154,6 +154,9 @@ struct play_ui : ui_functions {
 	a_string card_text;                           // "title\nKEY\tLabel\tEN\n…" for the JS overlay
 	a_string status_text;                         // producer queue + progress, rebuilt per frame
 	a_string resources_text;                      // minerals/gas/supply HUD, rebuilt per frame
+	a_string error_text, error_status_text;       // last blocked-command reason, for the JS toast
+	int error_seq = 0;                            // bumped whenever error_text is (re)set
+	int line_move_color = -1, line_atk_color = -1;   // order/rally line palette indices (lazy)
 
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
@@ -502,6 +505,48 @@ struct play_ui : ui_functions {
 		return resources_text.c_str();
 	}
 
+	// ---- blocked-command feedback ------------------------------------------------
+	void raise_error(const char* msg) { error_text = msg; ++error_seq; }
+	// "seq\tmessage": the host shows a toast whenever seq changes.
+	const char* error_status() {
+		error_status_text = format("%d\t%s", error_seq, error_text.c_str());
+		return error_status_text.c_str();
+	}
+	const char* supply_error_msg() const {
+		int r = (int)my_race;   // 1 = Terran, 2 = Protoss, else Zerg
+		return r == 1 ? "You must construct additional supply depots"
+		     : r == 2 ? "You must construct additional pylons"
+		     :          "Not enough food — build more overlords";
+	}
+	// Why a visible command can't run right now (nullptr = it can). Tech is already
+	// gated by which buttons appear, so the only live blockers are resources / supply.
+	const char* block_reason(const cmd_t& c) {
+		int minc = 0, gasc = 0; const unit_type_t* ut = nullptr;
+		if (c.act == C_UPGRADE) {
+			const upgrade_type_t* up = get_upgrade_type(c.upg);
+			minc = upgrade_mineral_cost(my_player, up); gasc = upgrade_gas_cost(my_player, up);
+		} else if (c.act == C_RESEARCH) {
+			const tech_type_t* te = get_tech_type(c.tech);
+			minc = te->mineral_cost; gasc = te->gas_cost;
+		} else if (c.ut != UnitTypes::None) {
+			ut = get_unit_type(c.ut);
+			minc = ut->mineral_cost; gasc = ut->gas_cost;
+		}
+		if ((int)st.current_minerals[my_player] < minc) return "Not enough minerals";
+		if ((int)st.current_gas[my_player] < gasc) return "Not enough vespene gas";
+		if (ut && (c.act == C_TRAIN || c.act == C_MORPH) &&
+		    !has_available_supply_for(my_player, ut, false)) return supply_error_msg();
+		return nullptr;
+	}
+
+	// Cancel the build-queue entry at `slot` (0 = the one in progress) on the single
+	// selected producer, refunding it — driven by clicking a status chip in the host.
+	void cancel_queue_slot(int slot) {
+		if (slot < 0) return;
+		sync_selection();
+		action_cancel_build_queue(my_player, (size_t)slot);
+	}
+
 	// Is there a unit under the current cursor position?
 	bool hovering_unit() {
 		return mouse_x >= 0 && mouse_y >= 0 && select_get_unit_at(screen_to_map(mouse_x, mouse_y)) != nullptr;
@@ -523,6 +568,11 @@ struct play_ui : ui_functions {
 		for (auto& c : card) {
 			if (c.key != key) continue;
 			if (!c.enabled) return true;   // grayed out — consume the key, do nothing
+			// Build opens placement first (cost is taken on the placement click); every
+			// other producer spends immediately, so say why when it can't.
+			if (c.act != C_BUILD) {
+				if (const char* r = block_reason(c)) { raise_error(r); return true; }
+			}
 			switch (c.act) {
 			case C_MOVE:      start_target(T_MOVE); break;
 			case C_ATTACK:    start_target(T_ATTACK); break;
@@ -597,6 +647,9 @@ struct play_ui : ui_functions {
 	}
 
 	void place_pending(int mx, int my) {
+		// Cost is taken now, at placement — report a shortfall and keep the ghost up.
+		if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error("Not enough minerals"); return; }
+		if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error("Not enough vespene gas"); return; }
 		int tx, ty;
 		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
@@ -692,10 +745,76 @@ struct play_ui : ui_functions {
 			it.has_directional_frames ? 12 : 0, nullptr);
 	}
 
+	// A clipped Bresenham line in screen space (map coords minus the camera).
+	void draw_map_line(uint8_t* data, size_t data_pitch, xy a, xy b, uint8_t color) {
+		int x0 = a.x - screen_pos.x, y0 = a.y - screen_pos.y;
+		int x1 = b.x - screen_pos.x, y1 = b.y - screen_pos.y;
+		int adx = x1 > x0 ? x1 - x0 : x0 - x1, ady = y1 > y0 ? y1 - y0 : y0 - y1;
+		int sx = x0 < x1 ? 1 : -1, sy = y0 < y1 ? 1 : -1, err = adx - ady;
+		for (;;) {
+			if ((unsigned)x0 < screen_width && (unsigned)y0 < screen_height)
+				data[(size_t)y0 * data_pitch + x0] = color;
+			if (x0 == x1 && y0 == y1) break;
+			int e2 = 2 * err;
+			if (e2 > -ady) { err -= ady; x0 += sx; }
+			if (e2 <  adx) { err += adx; y0 += sy; }
+		}
+	}
+	// A small filled diamond marking an order's destination.
+	void draw_marker(uint8_t* data, size_t data_pitch, xy p, uint8_t color) {
+		int cx = p.x - screen_pos.x, cy = p.y - screen_pos.y;
+		for (int dy = -3; dy <= 3; ++dy)
+			for (int dx = -3; dx <= 3; ++dx) {
+				if ((dx < 0 ? -dx : dx) + (dy < 0 ? -dy : dy) > 3) continue;
+				int px = cx + dx, py = cy + dy;
+				if ((unsigned)px < screen_width && (unsigned)py < screen_height)
+					data[(size_t)py * data_pitch + px] = color;
+			}
+	}
+	static bool close_xy(xy a, xy b) { int dx = a.x - b.x, dy = a.y - b.y; return dx * dx + dy * dy < 16 * 16; }
+
+	// Selected units' orders as lines (green move/rally, red attack) with a diamond at
+	// each destination, so where things are headed — and a producer's rally — is visible.
+	void draw_order_lines(uint8_t* data, size_t data_pitch) {
+		if (current_selection.empty()) return;
+		if (line_move_color < 0) {
+			line_move_color = nearest_palette_color(40, 240, 40);
+			line_atk_color  = nearest_palette_color(240, 40, 40);
+		}
+		for (auto uid : current_selection) {
+			unit_t* u = get_unit(uid);
+			if (!u || u->owner != my_player) continue;
+			if (u_grounded_building(u)) {
+				xy r = u->building.rally.pos;   // rally defaults to the building itself
+				if (r != xy() && !close_xy(r, u->sprite->position)) {
+					draw_map_line(data, data_pitch, u->sprite->position, r, line_move_color);
+					draw_marker(data, data_pitch, r, line_move_color);
+				}
+				continue;
+			}
+			// Mobile unit: its active destination, then any shift-queued waypoints.
+			xy prev = u->sprite->position; bool any = false;
+			auto seg = [&](xy to, unit_t* tu) {
+				if (to == xy() || close_xy(to, prev)) return;
+				uint8_t col = (tu && tu->owner != my_player && tu->owner < 8) ? line_atk_color : line_move_color;
+				draw_map_line(data, data_pitch, prev, to, col);
+				prev = to; any = true;
+			};
+			if (u->move_target.pos != xy()) seg(u->move_target.pos, u->order_target.unit);
+			for (order_t* o : ptr(u->order_queue)) {
+				xy t = o->target.position;
+				if (t == xy() && o->target.unit) t = o->target.unit->sprite->position;
+				seg(t, o->target.unit);
+			}
+			if (any) draw_marker(data, data_pitch, prev, line_move_color);
+		}
+	}
+
 	// Placement preview: a faded, tinted silhouette of the actual building, plus a
 	// footprint outline so the exact tiles it will occupy are unambiguous.
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_callback(data, data_pitch);
+		draw_order_lines(data, data_pitch);
 
 		if (!pending_build) return;
 		if (place_ok_color < 0) {

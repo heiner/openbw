@@ -475,9 +475,16 @@ async function boot(race) {
     const p = text.split('\t');
     const prog = Math.max(0, Math.min(100, parseInt(p[0], 10) || 0));
     let html = `<span class="bar"><i style="width:${prog}%"></i></span>`;
-    for (let i = 1; i < p.length; i++) html += `<span class="q${i === 1 ? ' cur' : ''}">${p[i]}</span>`;
+    // p[1..] are the queued units in order; chip i maps to build-queue slot i-1.
+    for (let i = 1; i < p.length; i++)
+      html += `<span class="q${i === 1 ? ' cur' : ''}" data-slot="${i - 1}" title="Click to cancel">${p[i]}</span>`;
     statusEl.innerHTML = html;
   };
+  // Click a queued item to cancel it (resources refunded).
+  statusEl.addEventListener('click', (e) => {
+    const q = e.target.closest('.q');
+    if (q && q.dataset.slot !== undefined) x.openbw_cancel(+q.dataset.slot);
+  });
 
   // Resource HUD: "minerals\tgas\tsupply_used\tsupply_max".
   const resEl = $('resources');
@@ -519,6 +526,25 @@ async function boot(race) {
       `<span class="r sup">${ico(ri[2], 'sup')}<span class="${cap}">${used}/${max}</span></span>`;
   };
 
+  // Blocked-command toast: openbw_error() returns "seq\tmessage"; flash the message
+  // whenever seq changes (e.g. "Not enough minerals" when a build is unaffordable).
+  const toastEl = $('toast');
+  let lastErrSeq = -1, toastTimer = 0;
+  const updateError = () => {
+    const ptr = x.openbw_error();
+    const text = ptr ? readCString(ptr) : '';
+    if (!text) return;
+    const tab = text.indexOf('\t');
+    const seq = +text.slice(0, tab), msg = text.slice(tab + 1);
+    if (seq === lastErrSeq) return;
+    lastErrSeq = seq;
+    if (!msg) return;
+    toastEl.textContent = msg;
+    toastEl.classList.add('show');
+    clearTimeout(toastTimer);
+    toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
+  };
+
   let iw = 0, ih = 0, image = null;
   // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
   // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
@@ -547,6 +573,7 @@ async function boot(race) {
     updateCard();
     updateStatus();
     updateResources();
+    updateError();
     updateCursor();
     requestAnimationFrame(frame);
   }
