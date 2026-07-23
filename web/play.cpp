@@ -316,7 +316,23 @@ int run_nettest(const char* data_dir, const char* map_file, int my_player, race_
 		check("build supply");
 	}
 
-	// --- stop / hold: opcodes 26 / 43 ---
+	// --- spell: cast Psionic Storm at a position (opcode 21 with a Cast* order) ---
+	if (my_race == race_t::protoss) {
+		unit_t* ha = afa.create_completed_unit(afa.get_unit_type(UnitTypes::Protoss_High_Templar),
+		                                       find_unit_of_type(sa, my_player, kit.worker)->sprite->position + xy(64,0), my_player);
+		unit_t* hb = afb.create_completed_unit(afb.get_unit_type(UnitTypes::Protoss_High_Templar),
+		                                       find_unit_of_type(sb, my_player, kit.worker)->sprite->position + xy(64,0), my_player);
+		if (ha && hb) {
+			xy at = ha->sprite->position + xy(128, 0);
+			uint16_t ida = afa.get_unit_id(ha).raw_value;
+			w.select(&ida, 1); w.order(Orders::CastPsionicStorm, at, 0, false); flush();
+			afb.action_select(my_player, hb);
+			afb.action_order(my_player, afb.get_order_type(Orders::CastPsionicStorm), at, nullptr, nullptr, false);
+			check("cast psionic storm");
+		}
+	}
+
+	// --- stop / hold: opcodes 26 / 43 ---	// --- stop / hold: opcodes 26 / 43 ---
 	w.queued(26, false); flush(); afb.action_stop(my_player, false);          check("stop");
 	w.queued(43, false); flush(); afb.action_hold_position(my_player, false); check("hold position");
 

@@ -245,8 +245,10 @@ struct play_ui : ui_functions {
 	int icon_w = 0, icon_h = 0;              // size of the last render_icon() result
 	a_vector<uint8_t> icon_index, icon_rgba; // scratch: 8-bit frame, then RGBA
 
-	enum targ_t { T_ATTACK, T_MOVE, T_PATROL, T_GATHER, T_REPAIR, T_RALLY };
+	enum targ_t { T_ATTACK, T_MOVE, T_PATROL, T_GATHER, T_REPAIR, T_RALLY, T_SPELL };
 	targ_t pending_targ = T_ATTACK;
+	Orders pending_spell_order{};   // the spell to cast once its target is clicked
+	bool pending_spell_unit = false;   // does that spell target a unit (vs the ground)?
 
 	enum cmd_act { C_MOVE, C_STOP, C_ATTACK, C_GATHER, C_HOLD, C_PATROL,
 	               C_BUILDMENU, C_ADVMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
@@ -258,7 +260,8 @@ struct play_ui : ui_functions {
 	               C_BURROW, C_UNBURROW,      // Zerg burrow
 	               C_CLOAK, C_DECLOAK,        // Wraith / Ghost cloak
 	               C_FIGHTER,                 // Carrier interceptor / Reaver scarab
-	               C_ARCHON, C_DARCHON };     // High / Dark Templar merges
+	               C_ARCHON, C_DARCHON,       // High / Dark Templar merges
+	               C_SPELL };                 // a targeted spellcaster ability
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
 	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None;
 	               uint16_t unit = 0; };   // target unit id (C_UNLOAD)
@@ -563,6 +566,44 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	// Targeted spellcaster abilities. Each is action_order (opcode 21) with the spell's
+	// Cast* order, gated by unit_can_use_tech (tech researched + right unit) and grayed when
+	// energy is short. targ_unit picks a unit target; otherwise it targets the ground.
+	struct spell_t { UnitTypes caster; TechTypes tech; Orders order; bool targ_unit; const char* label; char key; };
+	static const spell_t* spells(size_t& n) {
+		using U = UnitTypes; using T = TechTypes; using O = Orders;
+		static const spell_t s[] = {
+			{U::Terran_Ghost, T::Lockdown, O::CastLockdown, true, "Lockdown", 'l'},
+			{U::Terran_Science_Vessel, T::Defensive_Matrix, O::CastDefensiveMatrix, true, "Defensive Matrix", 'd'},
+			{U::Terran_Science_Vessel, T::Irradiate, O::CastIrradiate, true, "Irradiate", 'i'},
+			{U::Terran_Science_Vessel, T::EMP_Shockwave, O::CastEMPShockwave, false, "EMP Shockwave", 'e'},
+			{U::Terran_Battlecruiser, T::Yamato_Gun, O::FireYamatoGun, true, "Yamato Gun", 'y'},
+			{U::Terran_Medic, T::Restoration, O::CastRestoration, true, "Restoration", 'r'},
+			{U::Terran_Medic, T::Optical_Flare, O::CastOpticalFlare, true, "Optical Flare", 'o'},
+			{U::Protoss_High_Templar, T::Psionic_Storm, O::CastPsionicStorm, false, "Psionic Storm", 't'},
+			{U::Protoss_High_Templar, T::Hallucination, O::CastHallucination, true, "Hallucination", 'h'},
+			{U::Protoss_Dark_Archon, T::Feedback, O::CastFeedback, true, "Feedback", 'f'},
+			{U::Protoss_Dark_Archon, T::Maelstrom, O::CastMaelstrom, false, "Maelstrom", 'm'},
+			{U::Protoss_Dark_Archon, T::Mind_Control, O::CastMindControl, true, "Mind Control", 'c'},
+			{U::Protoss_Arbiter, T::Recall, O::CastRecall, false, "Recall", 'r'},
+			{U::Protoss_Arbiter, T::Stasis_Field, O::CastStasisField, false, "Stasis Field", 's'},
+			{U::Protoss_Corsair, T::Disruption_Web, O::CastDisruptionWeb, false, "Disruption Web", 'd'},
+			{U::Zerg_Queen, T::Ensnare, O::CastEnsnare, false, "Ensnare", 'e'},
+			{U::Zerg_Queen, T::Parasite, O::CastParasite, true, "Parasite", 'r'},
+			{U::Zerg_Queen, T::Spawn_Broodlings, O::CastSpawnBroodlings, true, "Spawn Broodlings", 'g'},
+			{U::Zerg_Defiler, T::Dark_Swarm, O::CastDarkSwarm, false, "Dark Swarm", 'w'},
+			{U::Zerg_Defiler, T::Plague, O::CastPlague, false, "Plague", 'p'},
+			{U::Zerg_Defiler, T::Consume, O::CastConsume, true, "Consume", 'c'},
+		};
+		n = sizeof(s) / sizeof(s[0]);
+		return s;
+	}
+	const spell_t* find_spell(TechTypes t) {
+		size_t n; const spell_t* s = spells(n);
+		for (size_t i = 0; i != n; ++i) if (s[i].tech == t) return &s[i];
+		return nullptr;
+	}
+
 	// Canonical BW hotkey for building placement and building morphs (Lair, Sunken…).
 	static char bw_build_key(UnitTypes id) {
 		using U = UnitTypes;
@@ -704,6 +745,19 @@ struct play_ui : ui_functions {
 		// Two templar merge into an archon.
 		if (id == U::Protoss_High_Templar) card.push_back({pick_key("Archon"), "Merge Archon", C_ARCHON, U::Protoss_Archon});
 		else if (id == U::Protoss_Dark_Templar) card.push_back({pick_key("Dark Archon"), "Dark Archon", C_DARCHON, U::Protoss_Dark_Archon});
+		// Targeted spellcaster abilities: shown once the tech is available, grayed when
+		// energy is short. The canonical key falls back to auto-assign on a collision.
+		size_t nsp; const spell_t* sp = spells(nsp);
+		for (size_t i = 0; i != nsp; ++i) {
+			if (sp[i].caster != id) continue;
+			const tech_type_t* te = get_tech_type(sp[i].tech);
+			if (!unit_can_use_tech(u, te, my_player)) continue;
+			char k = sp[i].key;
+			for (auto& c : card) if (c.key == k) { k = 0; break; }
+			bool have_energy = u->energy.integer_part() >= te->energy_cost;
+			card.push_back({k ? k : pick_key(sp[i].label), sp[i].label, C_SPELL,
+			                U::None, have_energy, sp[i].tech});
+		}
 		// Cargo: a bunker/transport shows each carried unit (click its icon to eject just
 		// that one) plus an Unload button that ejects everything.
 		if (unit_provides_space(u)) {
@@ -1073,6 +1127,10 @@ struct play_ui : ui_functions {
 			case C_FIGHTER:   sync_selection(); cmds.train_fighter(); break;
 			case C_ARCHON:    sync_selection(); cmds.morph_archon(); break;
 			case C_DARCHON:   sync_selection(); cmds.morph_dark_archon(); break;
+			case C_SPELL:     if (const spell_t* s = find_spell(c.tech)) {
+			                      pending_spell_order = s->order; pending_spell_unit = s->targ_unit;
+			                      start_target(T_SPELL);
+			                  } break;
 			}
 			return true;
 		}
@@ -1105,6 +1163,7 @@ struct play_ui : ui_functions {
 		case T_GATHER: cmd_default_order(pos, target, q); break;
 		case T_REPAIR: cmd_order(Orders::Repair, pos, target, q); break;
 		case T_RALLY:  cmd_order(target ? Orders::RallyPointUnit : Orders::RallyPointTile, pos, target, false); break;
+		case T_SPELL:  cmd_order(pending_spell_order, pos, pending_spell_unit ? target : nullptr, false); break;
 		}
 		if (unit_t* u = primary_selected())
 			play_unit_ack(u, u->unit_type->first_yes_sound, u->unit_type->last_yes_sound);
@@ -1265,7 +1324,7 @@ struct play_ui : ui_functions {
 
 	// Flash a target's ring when an order is aimed at it (attack / gather / follow), like
 	// the original's target-acquisition blink.
-	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = 24; } }
+	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = 80; } }
 
 	// A clipped ellipse outline (midpoint) in screen space — the target ring. Rendering
 	// only, so ordinary float math is fine (not part of the deterministic sim).
@@ -1293,7 +1352,7 @@ struct play_ui : ui_functions {
 	void draw_target_flash(uint8_t* data, size_t pitch) {
 		if (flash_frames <= 0) return;
 		--flash_frames;
-		if ((flash_frames / 6) % 2 != 0) return;   // off phase of the blink
+		if ((flash_frames / 20) % 2 != 0) return;   // ~1/3s on, 1/3s off → two slow blinks
 		unit_t* t = get_unit(flash_unit);
 		if (!t) { flash_frames = 0; return; }
 		if (line_move_color < 0) {
