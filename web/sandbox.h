@@ -483,24 +483,36 @@ struct play_ui : ui_functions {
 		}
 	}
 
-	// Producer status for the JS overlay: "<progress%>\t<name>\t<name>…" (the
-	// first name is the unit being trained), or empty if nothing is training.
+	// Producer status for the JS overlay: "<progress%>\t<name>\t<name>…" (the first name
+	// is what's in progress), or empty if idle. Covers unit training and — since those
+	// live on a different field — tech research and upgrades.
 	const char* build_status() {
 		status_text.clear();
 		unit_t* u = primary_selected();
-		if (u && !u->build_queue.empty()) {
+		if (!u) return status_text.c_str();
+		auto pct = [](int done, int total) { return total > 0 ? 100 * done / total : 0; };
+		if (!u->build_queue.empty()) {
 			int prog = 0;
 			if (u->current_build_unit) {
 				int bt = u->current_build_unit->unit_type->build_time;
-				if (bt > 0) prog = 100 * (bt - u->current_build_unit->remaining_build_time) / bt;
+				prog = pct(bt - u->current_build_unit->remaining_build_time, bt);
 			} else {
 				// A Zerg egg / morphing unit counts down its own remaining_build_time
 				// toward the queued unit's build time (no separate current_build_unit).
 				int bt = u->build_queue.front()->build_time;
-				if (bt > 0) prog = 100 * (bt - u->remaining_build_time) / bt;
+				prog = pct(bt - u->remaining_build_time, bt);
 			}
 			status_text += format("%d", prog);
 			for (auto* ut : u->build_queue) { status_text += '\t'; status_text += unit_name(ut->id); }
+		} else if (unit_is_researching(u)) {
+			const tech_type_t* te = u->building.researching_type;
+			status_text += format("%d", pct(te->research_time - u->building.upgrade_research_time, te->research_time));
+			status_text += '\t'; status_text += tech_name(te);
+		} else if (unit_is_upgrading(u)) {
+			const upgrade_type_t* up = u->building.upgrading_type;
+			int tot = upgrade_time_cost(my_player, up);
+			status_text += format("%d", pct(tot - u->building.upgrade_research_time, tot));
+			status_text += '\t'; status_text += upgrade_name(up);
 		}
 		return status_text.c_str();
 	}
@@ -573,11 +585,14 @@ struct play_ui : ui_functions {
 		return E_NONE;
 	}
 
-	// Cancel the build-queue entry at `slot` (0 = the one in progress) on the single
-	// selected producer, refunding it — driven by clicking a status chip in the host.
+	// Cancel the status chip the host clicked (0 = the one in progress), refunding it.
+	// Training queues cancel by slot; a research/upgrade in progress has its own action.
 	void cancel_queue_slot(int slot) {
 		if (slot < 0) return;
 		sync_selection();
+		unit_t* u = primary_selected();
+		if (u && u->build_queue.empty() && unit_is_researching(u)) { action_cancel_research(my_player); return; }
+		if (u && u->build_queue.empty() && unit_is_upgrading(u)) { action_cancel_upgrade(my_player); return; }
 		action_cancel_build_queue(my_player, (size_t)slot);
 	}
 
