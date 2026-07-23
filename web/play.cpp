@@ -90,7 +90,7 @@ int run_windowed(const char* data_dir, const char* map_file, int my_player, race
 	data_loading::mpq_file<> map_loader(map_file);
 	setup_melee(ui.player.st(), map_loader, my_player, my_race);
 
-	ui.wnd.create("OpenBW", 0, 0, (int)screen_width, (int)screen_height);
+	ui.wnd.create("OpenBW Web", 0, 0, (int)screen_width, (int)screen_height);
 	ui.resize((int)screen_width, (int)screen_height);
 	ui.set_image_data();
 	xy start = ui.game_st.start_locations[my_player];

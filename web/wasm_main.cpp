@@ -92,7 +92,7 @@ static void init_game(int width, int height, int my_slot, const mp_slot* slots, 
 	data_loading::mpq_file<data_loading::js_file_reader<>> map_loader("openbw.map");
 	setup_melee_slots(g_ui->player.st(), map_loader, slots, n);
 
-	g_ui->wnd.create("OpenBW", 0, 0, width, height);
+	g_ui->wnd.create("OpenBW Web", 0, 0, width, height);
 	g_ui->resize(width, height);
 	g_ui->set_image_data();
 	xy start = g_ui->game_st.start_locations[my_slot];
@@ -115,7 +115,7 @@ OPENBW_EXPORT(openbw_init) void openbw_init(int width, int height, int race, int
 OPENBW_EXPORT(openbw_resize) void openbw_resize(int width, int height) {
 	if (!g_ui) return;
 	g_ui->wnd.destroy();
-	g_ui->wnd.create("OpenBW", 0, 0, width, height);
+	g_ui->wnd.create("OpenBW Web", 0, 0, width, height);
 	g_ui->resize(width, height);
 }
 
