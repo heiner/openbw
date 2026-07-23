@@ -11,9 +11,13 @@
   #wrap { position: fixed; inset: 0; }
   #screen { image-rendering: pixelated; display: block; width: 100vw; height: 100vh;
     background: #111; cursor: default; }
-  #overlay { position: fixed; inset: 0; display: grid; place-items: center;
-    background: rgba(0,0,0,.85); text-align: center; z-index: 10; }
-  #overlay .card { max-width: 560px; padding: 24px 28px; }
+  /* Anchored to the top, not vertically centred: the panel gains rows as you host or
+     join, and centring made every existing row jump upward each time. Growing downwards
+     keeps the title and buttons put. Scrolls if it outgrows the viewport. */
+  #overlay { position: fixed; inset: 0; display: grid; place-items: start center;
+    background: rgba(0,0,0,.85); text-align: center; z-index: 10;
+    padding: 7vh 16px 32px; box-sizing: border-box; overflow-y: auto; }
+  #overlay .card { max-width: 560px; padding: 0 28px; }
   h1 { font-size: 20px; margin: 0 0 8px; color: #e2e8f0; }
   h1 a { color: inherit; text-decoration: none; }
   h1 a:hover { text-decoration: underline; }
@@ -229,7 +233,7 @@
 
       <!-- Host only: paste back what the joiner sends. -->
       <div id="mp-step-answer" style="display:none">
-        <div class="hint">Then paste your friend's response here:</div>
+        <div class="hint">2. Then paste your friend&rsquo;s response here:</div>
         <div class="codeline">
           <input id="mp-in-answer" type="text" spellcheck="false" placeholder="Paste response">
           <button id="mp-connect">Connect</button>
