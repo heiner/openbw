@@ -463,25 +463,33 @@ async function boot(race) {
     x.openbw_key(1, sym, 0); x.openbw_key(0, sym, 0);   // frame loop processes it
   });
 
-  // Producer status: "<progress%>\t<name(training)>\t<queued>…"
+  // Producer status: "<progress%>\t<name(training)>\t<queued>…". The progress ticks
+  // every frame, so only rebuild the chips when the item list changes and just move the
+  // bar otherwise — rebuilding the whole thing each frame flickers and eats clicks.
   const statusEl = $('status');
-  let lastStatus = '';
+  let lastStatusKey = null, statusBar = null;
   const updateStatus = () => {
     const ptr = x.openbw_status();
     const text = ptr ? readCString(ptr) : '';
-    if (text === lastStatus) return;
-    lastStatus = text;
-    if (!text) { statusEl.innerHTML = ''; return; }
-    const p = text.split('\t');
-    const prog = Math.max(0, Math.min(100, parseInt(p[0], 10) || 0));
-    let html = `<span class="bar"><i style="width:${prog}%"></i></span>`;
-    // p[1..] are the queued units in order; chip i maps to build-queue slot i-1.
-    for (let i = 1; i < p.length; i++)
-      html += `<span class="q${i === 1 ? ' cur' : ''}" data-slot="${i - 1}" title="Click to cancel">${p[i]}</span>`;
-    statusEl.innerHTML = html;
+    const p = text ? text.split('\t') : [];
+    const key = p.slice(1).join('\t');   // the chips (names), independent of progress
+    if (key !== lastStatusKey) {
+      lastStatusKey = key;
+      statusBar = null;
+      if (!text) { statusEl.innerHTML = ''; return; }
+      let html = `<span class="bar"><i></i></span>`;
+      // p[1..] are the queued units in order; chip i maps to build-queue slot i-1.
+      for (let i = 1; i < p.length; i++)
+        html += `<span class="q${i === 1 ? ' cur' : ''}" data-slot="${i - 1}" title="Click to cancel">${p[i]}</span>`;
+      statusEl.innerHTML = html;
+      statusBar = statusEl.querySelector('.bar > i');
+    }
+    if (statusBar) statusBar.style.width = (Math.max(0, Math.min(100, parseInt(p[0], 10) || 0))) + '%';
   };
-  // Click a queued item to cancel it (resources refunded).
-  statusEl.addEventListener('click', (e) => {
+  // Cancel a queued item (resources refunded). mousedown, not click: acts on the press
+  // and stays reliable even if the chip list happens to rebuild mid-interaction.
+  statusEl.addEventListener('mousedown', (e) => {
+    if (e.button !== 0) return;
     const q = e.target.closest('.q');
     if (q && q.dataset.slot !== undefined) x.openbw_cancel(+q.dataset.slot);
   });
