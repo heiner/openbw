@@ -227,6 +227,16 @@ OPENBW_EXPORT(openbw_init_mp) void openbw_init_mp(int width, int height, int my_
 // sim, so they agree without exchanging anything.
 OPENBW_EXPORT(openbw_outcome) int openbw_outcome() { return g_ui ? g_ui->outcome : 0; }
 
+// Number of start locations on the loaded map. The host picks starting slots before the
+// map is parsed (start locations aren't known that early), so it works from a table; this
+// lets the host verify that table at runtime instead of trusting it silently.
+OPENBW_EXPORT(openbw_start_locations) int openbw_start_locations() {
+	if (!g_ui) return 0;
+	int n = 0;
+	for (size_t i = 0; i != 8; ++i) if (g_ui->game_st.start_locations[i] != xy()) ++n;
+	return n;
+}
+
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
 
 // Desync probe (shared implementation in sandbox.h, so native and wasm can't disagree).

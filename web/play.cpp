@@ -63,6 +63,11 @@ int run_headless(const char* data_dir, const char* map_file, int my_player,
 	ui::log("headless: after %d frames: current_frame=%d, units=%d, minerals=%d\n",
 		frames, (int)st.current_frame, count_units(st, my_player),
 		(int)st.current_minerals[my_player]);
+	{
+		int n = 0;
+		for (size_t i = 0; i != 8; ++i) if (st.game->start_locations[i] != xy()) ++n;
+		ui::log("headless: start locations = %d\n", n);
+	}
 	ui::log("headless: OK\n");
 	return 0;
 }

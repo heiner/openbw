@@ -23,13 +23,26 @@ const MPQS = [
 // The melee map: a CC BY 4.0 map committed under web/maps/ and deployed with the
 // site (see web/maps/ATTRIBUTION.md). MAP_REMOTE is an optional fallback, used only
 // if a build ever ships without the map file.
+// `starts` is the number of start locations. The engine ties slot -> start location ->
+// colour, so randomising which slot each player occupies randomises both. It has to be
+// known before the map is parsed (start locations aren't populated when our setup callback
+// runs), hence the table; boot() checks it against openbw_start_locations() and warns.
 const MAPS = [
-  { name: 'Weave',       file: './maps/Weave_v1.scx' },
-  { name: 'Benzene',     file: './maps/Benzene.scx' },
-  { name: 'Concourse',   file: './maps/Concourse_v1.scx' },
-  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx' },
-  { name: 'Thaw',        file: './maps/Thaw_v1.scx' },
+  { name: 'Weave',       file: './maps/Weave_v1.scx',       starts: 4 },
+  { name: 'Benzene',     file: './maps/Benzene.scx',        starts: 2 },
+  { name: 'Concourse',   file: './maps/Concourse_v1.scx',   starts: 8 },
+  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx',  starts: 8 },
+  { name: 'Thaw',        file: './maps/Thaw_v1.scx',        starts: 6 },
 ];
+// Pick `n` distinct start slots at random.
+function pickStartSlots(n, starts) {
+  const pool = [...Array(Math.max(starts, n)).keys()];
+  for (let i = pool.length - 1; i > 0; i--) {
+    const j = (Math.random() * (i + 1)) | 0;
+    [pool[i], pool[j]] = [pool[j], pool[i]];
+  }
+  return pool.slice(0, n);
+}
 const MAP_LOCAL = MAPS[0].file;
 const MAP_REMOTE = '';
 
@@ -494,6 +507,12 @@ async function boot(session) {
   }
   const mySums = new Map(), peerSums = new Map();
   const SUM_EVERY = 240;   // ~10 s at "fastest"
+  {
+    const m = MAPS.find((e) => e.file === (session.mapFile || MAP_LOCAL));
+    const actual = x.openbw_start_locations();
+    if (m && actual && m.starts !== actual)
+      console.warn(`[map] ${m.name}: table says ${m.starts} start locations, map has ${actual}`);
+  }
   if (DEV) window.__bw = { x, memory, lockstep, link };   // dev-only debugging handle
 
   // Pace the sim off wall-clock instead of one frame per timer tick, so a hiccup is made
@@ -815,7 +834,8 @@ if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
 for (const b of document.querySelectorAll('#controls button[data-race]')) {
   b.addEventListener('click', () => {
     $('controls').style.display = 'none';
-    boot({ slots: [{ slot: 0, race: +b.dataset.race }], mySlot: 0 })
+    const slot = pickStartSlots(1, (MAPS.find((m) => m.file === MAP_LOCAL) || {}).starts || 2)[0];
+    boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: MAP_LOCAL })
       .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
   }, { once: true });
 }
@@ -927,9 +947,14 @@ function mpCountdown(n) {
   }
   if (n <= 0) {
     if (mpRole !== 'host') return;          // the joiner starts on the host's `start`
-    const slots = mpSlots().map((s) => ({ slot: s.slot, race: resolveRace(s.race) }));
-    mpLink.sendControl({ t: 'start', slots, you: 1 });
-    mpBoot(slots, 0);
+    // Randomise who starts where. Slot drives both start location and colour, so this
+    // stops the host always being top-left in the same colour every game.
+    const races = mpSlots().map((s) => resolveRace(s.race));   // [host, joiner]
+    const starts = (MAPS.find((m) => m.file === mpMap) || {}).starts || 2;
+    const [hostSlot, joinSlot] = pickStartSlots(2, starts);
+    const slots = [{ slot: hostSlot, race: races[0] }, { slot: joinSlot, race: races[1] }];
+    mpLink.sendControl({ t: 'start', slots, you: joinSlot });
+    mpBoot(slots, hostSlot);
     return;
   }
   mpSay(`Starting in ${n}…${n <= LOCK_AT ? ' (races locked)' : ''}`, 'ok');
