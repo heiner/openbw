@@ -104,6 +104,13 @@ int run_windowed(const char* data_dir, const char* map_file, int my_player, race
 		while (now - last_frame >= frame_time && steps < 8) {
 			last_frame += frame_time;
 			++steps;
+			// Input is serialised to command bytes (see bw_cmd), not applied directly, so
+			// drain and apply it before stepping — the native equivalent of the browser
+			// host's lockstep pump. Without this, orders would silently do nothing.
+			if (!ui.outgoing.empty()) {
+				ui.apply_commands(my_player, ui.outgoing.data(), ui.outgoing.size());
+				ui.outgoing.clear();
+			}
 			ui.state_functions::next_frame();
 		}
 		ui.update();                          // render + camera/selection input

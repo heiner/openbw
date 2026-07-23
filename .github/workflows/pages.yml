@@ -36,7 +36,7 @@ jobs:
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp web/index.html web/openbw.js web/openbw.wasm web/CNAME _site/
+          cp web/index.html web/openbw.js web/net.js web/openbw.wasm web/CNAME _site/
           # A committed map (if any) ships too; otherwise the map is fetched at runtime.
           if compgen -G "web/maps/*.scx" > /dev/null; then
             mkdir -p _site/maps && cp web/maps/*.scx _site/maps/
