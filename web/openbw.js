@@ -874,7 +874,8 @@ const COUNTDOWN = 5, LOCK_AT = 2;
 const mp = {
   setup: $('mp-setup'),
   host: $('mp-host'), join: $('mp-join'),
-  stepInvite: $('mp-step-invite'), inInvite: $('mp-in-invite'), accept: $('mp-accept'),
+  stepInvite: $('mp-step-invite'), inviteHint: $('mp-invite-hint'),
+  inInvite: $('mp-in-invite'), accept: $('mp-accept'),
   stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
   stepAnswer: $('mp-step-answer'), inAnswer: $('mp-in-answer'), connect: $('mp-connect'),
   lobby: $('mp-lobby'), start: $('mp-start'), status: $('mp-status'),
@@ -912,6 +913,9 @@ function mpSetRole(role) {
   return true;
 }
 function mpResetRole() {                    // let the user try again after a failure
+  mp.inInvite.readOnly = false;
+  mp.accept.style.display = '';
+  mp.inviteHint.textContent = '1. Paste the invite code your friend sent:';
   mpRole = null;
   if (mpLink) { try { mpLink.close(); } catch {} mpLink = null; }
   mp.host.disabled = mp.join.disabled = false;
@@ -1053,9 +1057,15 @@ async function mpAcceptInvite(code) {
     return;
   }
   mpPeerRace = info.race ?? 1;
-  mpShow(mp.stepInvite, false);
+  // Keep the invite on screen rather than replacing it, so both halves of the exchange
+  // stay visible: what you received (now read-only) and what you send back.
+  mp.inInvite.value = code;
+  mp.inInvite.readOnly = true;
+  mp.accept.style.display = 'none';
+  mp.inviteHint.textContent = '1. Invite received from your friend:';
+  mpShow(mp.stepInvite, true);
   mpShow(mp.stepShare, true);
-  mp.shareHint.textContent = 'Send this response back to the host:';
+  mp.shareHint.textContent = '2. Send this response back to the host:';
   mp.out.value = answer;
   mpSay('Waiting for the host…');
 }
