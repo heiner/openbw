@@ -832,7 +832,7 @@ const MP_DELAY = 4;        // input delay in frames (~170 ms at "fastest")
 const COUNTDOWN = 5, LOCK_AT = 2;
 
 const mp = {
-  map: $('mp-map'), race: $('mp-race'), setup: $('mp-setup'),
+  map: $('mp-map'), setup: $('mp-setup'),
   host: $('mp-host'), join: $('mp-join'),
   stepInvite: $('mp-step-invite'), inInvite: $('mp-in-invite'), accept: $('mp-accept'),
   stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
@@ -852,9 +852,12 @@ const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className 
 const mpShow = (el, on) => { el.style.display = on ? 'block' : 'none'; };
 
 for (const m of MAPS) mp.map.add(new Option(m.name, m.file));
-for (const sel of [mp.race, mp.r[0], mp.r[1]]) fillRaces(sel);
+for (const sel of mp.r) fillRaces(sel);
 
-let mpLink = null, mpRole = null, mpMap = MAPS[0].file, mpPeerRace = 1, mpLocked = false;
+// Race is picked in the lobby, not before hosting — the handshake only carries the
+// starting value, and either side can change it until the countdown locks.
+const START_RACE = 1;   // Terran
+let mpLink = null, mpRole = null, mpMap = MAPS[0].file, mpPeerRace = START_RACE, mpLocked = false;
 
 // Choosing a role is one-way until it fails or the game starts. Without this, clicking
 // Host and Join in any order left both flows' panels on screen at once.
@@ -895,7 +898,6 @@ function mpEnterLobby() {
   mp.giMap.textContent = (MAPS.find((m) => m.file === mpMap) || {}).name || '—';
   mp.start.style.display = mpRole === 'host' ? '' : 'none';
   // Your row is editable; your opponent's mirrors what they picked.
-  mp.r[mpMine()].value = String(+mp.race.value);
   mp.r[mpTheirs()].value = String(mpPeerRace);
   mp.r[mpMine()].disabled = false;
   mp.r[mpTheirs()].disabled = true;
@@ -916,13 +918,12 @@ const mpSendRace = () => {
   if (mpLink) mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value });
 };
 mp.r[0].onchange = mp.r[1].onchange = mpSendRace;
-mp.race.onchange = () => { if (mpRole) { mp.r[mpMine()].value = mp.race.value; mpSendRace(); } };
 mp.map.onchange = () => { mpMap = mp.map.value; };
 
 function mpCountdown(n) {
   if (n <= LOCK_AT && !mpLocked) {
     mpLocked = true;
-    mp.race.disabled = mp.map.disabled = mp.r[0].disabled = mp.r[1].disabled = true;
+    mp.map.disabled = mp.r[0].disabled = mp.r[1].disabled = true;
   }
   if (n <= 0) {
     if (mpRole !== 'host') return;          // the joiner starts on the host's `start`
@@ -962,8 +963,8 @@ mp.host.onclick = async () => {
     mpMap = mp.map.value;
     mpSay('Preparing invite…');
     const hash = await mapHash(mpMap);
-    mpLink = mpNewLink(net, () => { mpLink.sendControl({ t: 'race', race: +mp.race.value }); mpEnterLobby(); });
-    const code = await mpLink.createOffer({ race: +mp.race.value, map: mpMap, hash });
+    mpLink = mpNewLink(net, () => { mpEnterLobby(); mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value }); });
+    const code = await mpLink.createOffer({ race: START_RACE, map: mpMap, hash });
     const url = location.origin + location.pathname + '#i=' + code;
     const fits = code.length <= net.MAX_URL_CODE;
     mpShow(mp.stepShare, true);
@@ -993,8 +994,8 @@ async function mpAcceptInvite(code) {
   if (at >= 0) code = code.slice(at + 3);
   if (!code.trim()) { mpSay('Paste the invite code first.', 'err'); return; }
   mpSay('Checking the map…');
-  mpLink = mpNewLink(net, () => { mpLink.sendControl({ t: 'race', race: +mp.race.value }); mpEnterLobby(); });
-  const { info, answer } = await mpLink.acceptOffer(code, { race: +mp.race.value });
+  mpLink = mpNewLink(net, () => { mpEnterLobby(); mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value }); });
+  const { info, answer } = await mpLink.acceptOffer(code, { race: START_RACE });
   // Same terrain, verified by content — not by filename.
   mpMap = info.map || MAP_LOCAL;
   mp.map.value = mpMap;
