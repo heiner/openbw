@@ -154,6 +154,9 @@
   #mp-status { margin-top: 8px; font-size: 12px; color: #94a3b8; min-height: 1.4em; }
   #mp-status.err { color: #f87171; }
   #mp-status.ok { color: #4ade80; }
+  #dropbtn { position: fixed; top: 58%; left: 50%; transform: translateX(-50%); z-index: 8;
+    display: none; background: #7a1a1a; color: #fee2e2; }
+  #dropbtn:hover { background: #991b1b; }
   #toast { position: fixed; top: 54px; left: 50%; transform: translate(-50%, -8px); z-index: 8;
     padding: 8px 16px; border-radius: 8px; background: rgba(122,26,26,.94); color: #fee2e2;
     font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
@@ -198,6 +201,7 @@
 <div id="hud"><div id="status"></div><div id="card"></div></div>
 <div id="toast"></div>
 <div id="paused"><span>Paused</span></div>
+<button id="dropbtn">Drop opponent</button>
 
 <div id="overlay"><div class="card">
   <h1><a id="home" href="./" title="Start over on a clean URL">OpenBW Web</a></h1>

@@ -475,22 +475,36 @@ async function boot(session) {
     delay,
     send: (msg) => { if (link && msg.t === 'turn') link.sendTurn(msg.f, msg.d); },
   });
-  let dropped = null;   // set when the peer is gone; the game then continues solo
+  let dropped = null;   // set when the peer is gone
+  let over = false;     // game finished (win / lose / disconnect) — stop stepping
+  const dropBtn = $('dropbtn');
   if (link) {
     const peerSlot = slots.find((s) => s.slot !== mySlot).slot;
     link.frameOf = () => lockstep.frame;
 
+    // End the multiplayer game cleanly: stop stepping, release the peer, and show a final
+    // banner. Used for a disconnect, a host-authority kick, and a manual drop after a stall.
+    const endMp = (banner) => {
+      if (over) return;
+      over = true;
+      dropped = dropped || banner;
+      lockstep.dropSlot(peerSlot);
+      dropBtn.style.display = 'none';
+      try { link.close(); } catch {}
+      setBanner(banner, 0);
+    };
     // The host is the authority: a peer sending turns for illegal frames, or whose sim has
     // diverged, is dropped rather than allowed to stall or corrupt the game.
     const kick = (why) => {
-      if (dropped) return;
-      dropped = why;
+      if (over) return;
       console.warn('[mp] dropping peer:', why);
       if (session.isHost) link.sendControl({ t: 'kick', why });
-      lockstep.dropSlot(peerSlot);
-      link.close();
-      setBanner(`Opponent dropped: ${why}`, 2600);
+      endMp(`Opponent dropped — ${why}`);
     };
+    // The channel closed or failed mid-game: in a 1v1, the opponent leaving is a win.
+    link.onClose = () => { if (!over) endMp('Opponent left — Victory!'); };
+    // Manual escape hatch shown after a long stall.
+    dropBtn.onclick = () => endMp('Opponent left — Victory!');
 
     // setTurnHandler (not a plain assignment) so turns that arrived while we were still
     // loading get replayed instead of dropped — they are never retransmitted.
@@ -502,17 +516,13 @@ async function boot(session) {
 
     // Periodic desync probe: both peers hash their sim at the same frames and compare.
     link.onControl = (msg) => {
-      if (msg.t === 'kick') {
-        dropped = msg.why || 'kicked';
-        setBanner(`Disconnected: ${dropped}`, 0);
-        return;
-      }
+      if (msg.t === 'kick') { endMp(`Disconnected — ${msg.why || 'kicked'}`); return; }
       if (msg.t !== 'sum') return;
       const mine = mySums.get(msg.f);
       if (mine === undefined) { peerSums.set(msg.f, msg.h); return; }
       mySums.delete(msg.f);
       if (mine !== msg.h && session.isHost) kick(`desync at frame ${msg.f}`);
-      else if (mine !== msg.h) setBanner('Desynced from host', 0);
+      else if (mine !== msg.h) endMp('Desynced — game ended');
     };
   }
   const mySums = new Map(), peerSums = new Map();
@@ -538,7 +548,7 @@ async function boot(session) {
   // not a bug; raising `delay` trades input lag for it. In real play both windows are
   // visible and this never applies — but two tabs in one window will crawl.
   const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000;
-  let stepTimer, over = false, stepClock = performance.now(), lastProgress = performance.now();
+  let stepTimer, stepClock = performance.now(), lastProgress = performance.now();
   const stepLoop = () => {
     if (!paused && !over) {
       const now = performance.now();
@@ -557,8 +567,11 @@ async function boot(session) {
         if (o) { over = true; setBanner(o === 1 ? 'Victory!' : 'Defeat', 0); }
       }
       // Hysteresis: only claim we're waiting after a sustained gap with no progress.
-      // Reacting to a single late turn made the banner flicker.
-      waiting = !!link && !dropped && (now - lastProgress) > 1500;
+      // Reacting to a single late turn made the banner flicker. After a long stall, offer
+      // to drop the opponent (their turns never resumed).
+      const stall = (link && !over) ? (now - lastProgress) : 0;
+      waiting = stall > 1500;
+      dropBtn.style.display = stall > 8000 ? 'block' : 'none';
       updateBanner();
       // Desync probe: both peers hash the same frames and compare. Sampled after the step,
       // so both label it with the same post-step frame number.
@@ -569,8 +582,9 @@ async function boot(session) {
         else {
           peerSums.delete(lockstep.frame);
           if (peer !== h) {
-            if (session.isHost) { console.warn('[mp] desync', lockstep.frame, h, peer); }
-            setBanner('Desync detected', 0);
+            console.warn('[mp] desync', lockstep.frame, h, peer);
+            if (session.isHost) link.sendControl({ t: 'kick', why: `desync at frame ${lockstep.frame}` });
+            over = true; dropped = 'desync'; setBanner('Desync detected — game ended', 0);
           }
         }
         link.sendControl({ t: 'sum', f: lockstep.frame, h });
