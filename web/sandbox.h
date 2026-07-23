@@ -171,6 +171,7 @@ struct bw_cmd {
 	void liftoff(xy pos) { begin(47); u16(pos.x); u16(pos.y); end(); }   // 47 building lift off
 	void unload_all(bool q) { begin(40); u8(q ? 1 : 0); end(); }     // 40 unload all cargo
 	void unload(uint16_t target) { begin(41); u16(target); end(); } // 41 unload one unit
+	void return_cargo(bool q) { begin(30); u8(q ? 1 : 0); end(); }   // 30 return cargo
 	void cloak() { begin(33); u8(0); end(); }                        // 33 cloak
 	void decloak() { begin(34); u8(0); end(); }                      // 34 decloak
 	void train_fighter() { begin(39); end(); }                       // 39 build interceptor/scarab
@@ -253,6 +254,7 @@ struct play_ui : ui_functions {
 	               C_RALLY, C_RESEARCH, C_UPGRADE,
 	               C_LIFT, C_LAND,      // Terran flying buildings
 	               C_UNLOAD, C_UNLOADALL,     // eject cargo from a bunker / transport
+	               C_RETURN,                  // worker return cargo
 	               C_BURROW, C_UNBURROW,      // Zerg burrow
 	               C_CLOAK, C_DECLOAK,        // Wraith / Ghost cloak
 	               C_FIGHTER,                 // Carrier interceptor / Reaver scarab
@@ -268,6 +270,9 @@ struct play_ui : ui_functions {
 	int error_seq = 0;                            // bumped whenever error_text is (re)set
 	bool show_order_lines = false;                   // draw selected-unit order/rally lines (off by default)
 	int line_move_color = -1, line_atk_color = -1;   // order/rally line palette indices (lazy)
+	int ring_neutral_color = -1;                     // yellow ring for neutral targets (lazy)
+	unit_id flash_unit;                              // target whose ring is flashing (0 = none)
+	int flash_frames = 0;                            // render frames left in the flash
 	// Event feedback: unit-ready voices on completion, "under attack" voice + minimap flash.
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
 	int alert_color = -1;                         // minimap flash palette index (lazy)
@@ -649,7 +654,10 @@ struct play_ui : ui_functions {
 		// Movement orders for commandable mobile units (not buildings, larvae, eggs).
 		if (!building && !unit_is(u, U::Zerg_Larva) && !unit_is_egg(u)) add_move_orders();
 		if (worker) {
-			card.push_back({'g', "Gather", C_GATHER, U::None});
+			// Carrying minerals/gas swaps Gather for Return Cargo in the same slot, as in
+			// the original.
+			if (u->carrying_flags & 3) card.push_back({'g', "Return Cargo", C_RETURN, U::None});
+			else card.push_back({'g', "Gather", C_GATHER, U::None});
 			if (id == U::Terran_SCV) card.push_back({'r', "Repair", C_REPAIR, U::None});
 			card.push_back({'b', "Build", C_BUILDMENU, U::None});
 			card.push_back({'v', "Advanced", C_ADVMENU, U::None});
@@ -1057,6 +1065,7 @@ struct play_ui : ui_functions {
 			                  pending_land = true; menu = 0; refresh_card(); break;
 			case C_UNLOAD:    sync_selection(); cmds.unload(c.unit); break;
 			case C_UNLOADALL: sync_selection(); cmds.unload_all(key_shift()); break;
+			case C_RETURN:    sync_selection(); cmds.return_cargo(key_shift()); break;
 			case C_BURROW:    sync_selection(); cmds.burrow(key_shift()); break;
 			case C_UNBURROW:  sync_selection(); cmds.unburrow(); break;
 			case C_CLOAK:     sync_selection(); cmds.cloak(); break;
@@ -1086,6 +1095,7 @@ struct play_ui : ui_functions {
 
 	void issue_target(xy pos) {
 		unit_t* target = select_get_unit_at(pos);
+		if (target && pending_targ != T_PATROL) flash_target(target);
 		sync_selection();
 		bool q = key_shift();
 		switch (pending_targ) {
@@ -1253,6 +1263,52 @@ struct play_ui : ui_functions {
 		return pbar_rgba.data();
 	}
 
+	// Flash a target's ring when an order is aimed at it (attack / gather / follow), like
+	// the original's target-acquisition blink.
+	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = 24; } }
+
+	// A clipped ellipse outline (midpoint) in screen space — the target ring. Rendering
+	// only, so ordinary float math is fine (not part of the deterministic sim).
+	void draw_ellipse(uint8_t* data, size_t pitch, int cx, int cy, int rx, int ry, uint8_t color) {
+		auto plot4 = [&](int x, int y) {
+			for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
+				int px = cx + sx * x, py = cy + sy * y;
+				if ((unsigned)px < screen_width && (unsigned)py < screen_height)
+					data[(size_t)py * pitch + px] = color;
+			}
+		};
+		float rx2 = (float)rx * rx, ry2 = (float)ry * ry;
+		int x = 0, y = ry;
+		float px = 0, py = 2 * rx2 * y;
+		float p = ry2 - rx2 * ry + 0.25f * rx2;
+		while (px < py) { plot4(x, y); ++x; px += 2 * ry2;
+			if (p < 0) p += ry2 + px; else { --y; py -= 2 * rx2; p += ry2 + px - py; } }
+		p = ry2 * (x + 0.5f) * (x + 0.5f) + rx2 * (float)(y - 1) * (y - 1) - rx2 * ry2;
+		while (y >= 0) { plot4(x, y); --y; py -= 2 * rx2;
+			if (p > 0) p += rx2 - py; else { ++x; px += 2 * ry2; p += rx2 - py + px; } }
+	}
+
+	// Draw the blinking target ring: green own, yellow neutral, red enemy; on for half of
+	// each ~6-frame phase, so over 24 frames it blinks about twice.
+	void draw_target_flash(uint8_t* data, size_t pitch) {
+		if (flash_frames <= 0) return;
+		--flash_frames;
+		if ((flash_frames / 6) % 2 != 0) return;   // off phase of the blink
+		unit_t* t = get_unit(flash_unit);
+		if (!t) { flash_frames = 0; return; }
+		if (line_move_color < 0) {
+			line_move_color = nearest_palette_color(40, 240, 40);
+			line_atk_color = nearest_palette_color(240, 40, 40);
+		}
+		if (ring_neutral_color < 0) ring_neutral_color = nearest_palette_color(240, 220, 40);
+		int color = t->owner == my_player ? line_move_color
+		          : t->owner < 8 ? line_atk_color : ring_neutral_color;
+		int cx = t->sprite->position.x - screen_pos.x;
+		int cy = t->sprite->position.y - screen_pos.y;
+		int rx = t->unit_type->placement_size.x / 2 + 3; if (rx < 6) rx = 6;
+		draw_ellipse(data, pitch, cx, cy, rx, rx * 3 / 5, (uint8_t)color);
+	}
+
 	// A clipped Bresenham line in screen space (map coords minus the camera).
 	void draw_map_line(uint8_t* data, size_t data_pitch, xy a, xy b, uint8_t color) {
 		int x0 = a.x - screen_pos.x, y0 = a.y - screen_pos.y;
@@ -1351,6 +1407,7 @@ struct play_ui : ui_functions {
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_callback(data, data_pitch);
 		draw_order_lines(data, data_pitch);
+		draw_target_flash(data, data_pitch);
 
 		if (!pending_build) return;
 		if (place_ok_color < 0) {
@@ -1451,6 +1508,7 @@ struct play_ui : ui_functions {
 				map_pos = screen_to_map(e.mouse_x, e.mouse_y);
 				target = select_get_unit_at(map_pos);
 			}
+			if (target) flash_target(target);
 			sync_selection();
 			cmd_default_order(map_pos, target, key_shift());
 			if (unit_t* u = primary_selected())
