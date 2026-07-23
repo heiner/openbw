@@ -13,6 +13,8 @@
 //   OPENBW_SELFTEST=1         scripted train/build verification
 //   OPENBW_SCREENSHOT=<ppm>   render one frame to a PPM (no display)
 //   OPENBW_DEMO=1             with SCREENSHOT: script a worker + building
+//   OPENBW_NETTEST=<n>        command-byte vs direct-call determinism harness
+//   OPENBW_FOGTEST=<n>        assert fog of war is per-player in a 2-player melee
 
 #include "sandbox.h"
 
@@ -135,6 +137,35 @@ void script_econ_demo(play_ui& ui) {
 	}
 	if (unit_t* w = find_unit_of_type(st, p, ui.kit.worker))
 		try_build_near(ui, p, ui.kit, w, st.game->start_locations[p]);
+}
+
+// Fog probe: set up a 2-player melee and report, per player, how many tiles each has
+// explored — and specifically whether each has explored the *other's* start location.
+// Fog is per-player only if each sees its own start and not the opponent's.
+int run_fogtest(const char* data_dir, const char* map_file, int frames) {
+	auto load = data_loading::data_files_directory(data_dir);
+	game_player p(load);
+	mp_slot slots[2] = { {0, race_t::terran}, {1, race_t::protoss} };
+	{ data_loading::mpq_file<> m(map_file); setup_melee_slots(p.st(), m, slots, 2); }
+	state& st = p.st();
+	for (int i = 0; i != frames; ++i) p.next_frame();
+
+	for (int pl = 0; pl != 2; ++pl) {
+		uint8_t mask = (uint8_t)(1 << pl);
+		size_t vis = 0, exp = 0, total = st.game->map_tile_width * st.game->map_tile_height;
+		for (size_t i = 0; i != total; ++i) {
+			if ((st.tiles[i].visible & mask) == 0) ++vis;
+			if ((st.tiles[i].explored & mask) == 0) ++exp;
+		}
+		ui::log("fogtest: player %d: visible=%d explored=%d of %d\n", pl, (int)vis, (int)exp, (int)total);
+		for (int other = 0; other != 2; ++other) {
+			xy s = st.game->start_locations[other];
+			size_t idx = (size_t)(s.y / 32) * st.game->map_tile_width + (s.x / 32);
+			ui::log("fogtest:   start loc of player %d -> visible=%d explored=%d\n", other,
+			        (st.tiles[idx].visible & mask) == 0, (st.tiles[idx].explored & mask) == 0);
+		}
+	}
+	return 0;
 }
 
 // Lockstep foundation test. Two sims run from the same map and seed: sim A is driven
@@ -357,6 +388,9 @@ int main(int argc, char** argv) {
 	}
 
 	if (getenv("OPENBW_SELFTEST")) return run_selftest(data_dir, map_file, my_player, my_race);
+
+	const char* fogtest = getenv("OPENBW_FOGTEST");
+	if (fogtest) return run_fogtest(data_dir, map_file, atoi(fogtest));
 
 	const char* nettest = getenv("OPENBW_NETTEST");
 	if (nettest) return run_nettest(data_dir, map_file, my_player, my_race, atoi(nettest));

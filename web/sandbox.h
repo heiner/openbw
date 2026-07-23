@@ -34,7 +34,11 @@ template<typename load_data_file_F>
 void setup_melee_slots(state& st, load_data_file_F&& load_data_file, const mp_slot* slots, size_t n) {
 	game_load_functions game_load(st);
 	game_load.load_map(std::forward<load_data_file_F>(load_data_file), [&]() {
-		game_load.setup_info.victory_condition = 0;   // melee, not UMS
+		// Melee, NOT "use map settings". The engine derives use_map_settings from these
+		// three being zero (bwgame.h), so leaving victory_condition at 0 silently ran the
+		// map's own trigger set — which on a melee map shares vision between players and
+		// made fog non-per-player. victory_condition 1 loads the built-in melee triggers.
+		game_load.setup_info.victory_condition = 1;
 		game_load.setup_info.tournament_mode = 0;
 		game_load.setup_info.starting_units = 0;
 		game_load.setup_info.resource_type = 1;         // standard melee resources
@@ -503,7 +507,9 @@ struct play_ui : ui_functions {
 			for (auto& c : card) if (c.act == C_TRAIN || c.act == C_MORPHBLDG) { produces = true; break; }
 			if (produces) card.push_back({pick_key("Rally"), "Set Rally Point", C_RALLY, U::None});
 			if (id == U::Zerg_Hatchery || id == U::Zerg_Lair || id == U::Zerg_Hive)
-				card.push_back({pick_key("Larva"), "Select Larva", C_SELECT, U::Zerg_Larva});
+				// Key off a prefix of the label, so the letter the host highlights is the
+				// hotkey. Passing "Larva" picked 'l' and lit the l in "Select" instead.
+				card.push_back({pick_key("Select"), "Select Larva", C_SELECT, U::Zerg_Larva});
 		}
 		// Unit abilities (not part of the build/upgrade/research enumeration).
 		if (id == U::Terran_Marine || id == U::Terran_Firebat)
