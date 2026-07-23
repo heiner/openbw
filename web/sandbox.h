@@ -157,6 +157,16 @@ struct play_ui : ui_functions {
 	a_string error_text, error_status_text;       // last blocked-command reason, for the JS toast
 	int error_seq = 0;                            // bumped whenever error_text is (re)set
 	int line_move_color = -1, line_atk_color = -1;   // order/rally line palette indices (lazy)
+	// Event feedback: unit-ready voices on completion, "under attack" voice + minimap flash.
+	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
+	int alert_color = -1;                         // minimap flash palette index (lazy)
+	int alert_cooldown = 0;                       // update-ticks until the voice may replay
+	int event_tick = 0;                           // local tick for the flash blink phase
+	struct alert_t { xy pos; int ttl; };
+	a_vector<alert_t> alerts;                     // active minimap flash markers
+	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
+	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
+	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
 
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
@@ -506,21 +516,45 @@ struct play_ui : ui_functions {
 	}
 
 	// ---- blocked-command feedback ------------------------------------------------
-	void raise_error(const char* msg) { error_text = msg; ++error_seq; }
-	// "seq\tmessage": the host shows a toast whenever seq changes.
-	const char* error_status() {
-		error_status_text = format("%d\t%s", error_seq, error_text.c_str());
-		return error_status_text.c_str();
-	}
+	// A blocked command's reason, tied to its advisor error voice (*AdErr00/01/02).
+	enum err_kind { E_NONE = 0, E_MINERALS, E_GAS, E_SUPPLY };
+	int err_sound_cache[4] = { -1, -2, -2, -2 };   // per kind, lazy (-2 = unresolved)
+
 	const char* supply_error_msg() const {
 		int r = (int)my_race;   // 1 = Terran, 2 = Protoss, else Zerg
 		return r == 1 ? "You must construct additional supply depots"
 		     : r == 2 ? "You must construct additional pylons"
 		     :          "Not enough food — build more overlords";
 	}
-	// Why a visible command can't run right now (nullptr = it can). Tech is already
-	// gated by which buttons appear, so the only live blockers are resources / supply.
-	const char* block_reason(const cmd_t& c) {
+	const char* err_message(err_kind k) const {
+		return k == E_MINERALS ? "Not enough minerals"
+		     : k == E_GAS      ? "Not enough vespene gas"
+		     : k == E_SUPPLY   ? supply_error_msg() : "";
+	}
+	// The race's advisor error line by filename (Terran's are lowercase tAdErr, so the
+	// lookup is case-insensitive): 00 = minerals, 01 = gas, 02 = supply.
+	int err_sound(err_kind k) {
+		if (err_sound_cache[k] == -2) {
+			int r = (int)my_race;
+			char buf[10] = { r == 1 ? 'T' : r == 2 ? 'P' : 'Z', 'A', 'd', 'E', 'r', 'r', '0',
+			                 char('0' + (k == E_GAS ? 1 : k == E_SUPPLY ? 2 : 0)), 0, 0 };
+			err_sound_cache[k] = find_sound(buf);
+		}
+		return err_sound_cache[k];
+	}
+	void raise_error(err_kind k) {
+		error_text = err_message(k); ++error_seq;
+		int s = err_sound(k);   // on-screen centre → full volume
+		if (s >= 0) play_sound(s, screen_pos + xy((int)screen_width / 2, (int)screen_height / 2), nullptr, false);
+	}
+	// "seq\tmessage": the host shows a toast whenever seq changes.
+	const char* error_status() {
+		error_status_text = format("%d\t%s", error_seq, error_text.c_str());
+		return error_status_text.c_str();
+	}
+	// Why a visible command can't run right now (E_NONE = it can). Tech is already gated
+	// by which buttons appear, so the only live blockers are resources / supply.
+	err_kind block_reason(const cmd_t& c) {
 		int minc = 0, gasc = 0; const unit_type_t* ut = nullptr;
 		if (c.act == C_UPGRADE) {
 			const upgrade_type_t* up = get_upgrade_type(c.upg);
@@ -532,11 +566,11 @@ struct play_ui : ui_functions {
 			ut = get_unit_type(c.ut);
 			minc = ut->mineral_cost; gasc = ut->gas_cost;
 		}
-		if ((int)st.current_minerals[my_player] < minc) return "Not enough minerals";
-		if ((int)st.current_gas[my_player] < gasc) return "Not enough vespene gas";
+		if ((int)st.current_minerals[my_player] < minc) return E_MINERALS;
+		if ((int)st.current_gas[my_player] < gasc) return E_GAS;
 		if (ut && (c.act == C_TRAIN || c.act == C_MORPH) &&
-		    !has_available_supply_for(my_player, ut, false)) return supply_error_msg();
-		return nullptr;
+		    !has_available_supply_for(my_player, ut, false)) return E_SUPPLY;
+		return E_NONE;
 	}
 
 	// Cancel the build-queue entry at `slot` (0 = the one in progress) on the single
@@ -545,6 +579,72 @@ struct play_ui : ui_functions {
 		if (slot < 0) return;
 		sync_selection();
 		action_cancel_build_queue(my_player, (size_t)slot);
+	}
+
+	// ---- event feedback (unit-ready / under-attack) ------------------------------
+	// Case-insensitive search of the sfx table (Terran advisor files are lowercase,
+	// Zerg/Protoss upper) — used a handful of times at most, then cached by the callers.
+	int find_sound(const char* substr) const {
+		auto lc = [](char c) { return c >= 'A' && c <= 'Z' ? char(c - 'A' + 'a') : c; };
+		a_string want;
+		for (const char* p = substr; *p; ++p) want += lc(*p);
+		for (size_t i = 0; i != sound_filenames.size(); ++i) {
+			a_string low;
+			for (char c : sound_filenames[i]) low += lc(c);
+			if (low.find(want) != a_string::npos) return (int)i;
+		}
+		return -1;
+	}
+	// The race's advisor "your forces are under attack" line (*AdUpd00), by filename so
+	// it survives sfx-table index shifts.
+	void resolve_alert_sound() {
+		int r = (int)my_race;   // 1 Terran, 2 Protoss, else Zerg
+		under_attack_sound = find_sound(r == 1 ? "TAdUpd00" : r == 2 ? "PAdUpd00" : "ZAdUpd00");
+	}
+	// Auto-spawned / transient units the game never announces (larva trickle, morph
+	// eggs, carrier interceptors, reaver scarabs) — skip their ready voice.
+	static bool announces_ready(const unit_t* u) {
+		using U = UnitTypes;
+		switch (u->unit_type->id) {
+		case U::Zerg_Larva: case U::Zerg_Egg: case U::Zerg_Cocoon: case U::Zerg_Lurker_Egg:
+		case U::Protoss_Interceptor: case U::Protoss_Scarab: return false;
+		default: return u->unit_type->ready_sound > 0;
+		}
+	}
+	void add_alert(xy pos) {
+		bool merged = false;
+		for (auto& a : alerts) {
+			int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
+			if (dx * dx + dy * dy < 256 * 256) { a.ttl = 90; merged = true; break; }   // ~8 tiles
+		}
+		if (!merged && alerts.size() < 8) alerts.push_back({pos, 90});
+		if (alert_cooldown == 0 && under_attack_sound >= 0) {
+			// On-screen centre → full volume, so the advisor is audible wherever the hit is.
+			play_sound(under_attack_sound, screen_pos + xy((int)screen_width / 2, (int)screen_height / 2), nullptr, false);
+			alert_cooldown = 300;   // ~5 s at 60 fps
+		}
+	}
+	// Once per frame: fire unit-ready voices on completion and raise under-attack alerts
+	// when an own unit loses life. The first pass seeds silently so startup units are quiet.
+	void poll_events() {
+		++event_tick;
+		if (alert_cooldown > 0) --alert_cooldown;
+		for (size_t i = 0; i != alerts.size();) {
+			if (--alerts[i].ttl <= 0) { alerts[i] = alerts.back(); alerts.pop_back(); }
+			else ++i;
+		}
+		if (under_attack_sound == -2) resolve_alert_sound();
+		bool seeding = !events_seeded;
+		for (unit_t* u : ptr(st.player_units[my_player])) {
+			uint16_t id = get_unit_id(u).raw_value;
+			if (u_completed(u) && announced.insert(id).second && !seeding && announces_ready(u))
+				play_sound(u->unit_type->ready_sound, u->sprite->position, u, false);
+			int life = u->hp.ceil().integer_part() + u->shield_points.integer_part();
+			auto it = last_life.find(id);
+			if (it != last_life.end() && life < it->second && !seeding) add_alert(u->sprite->position);
+			last_life[id] = life;
+		}
+		events_seeded = true;
 	}
 
 	// Is there a unit under the current cursor position?
@@ -571,7 +671,7 @@ struct play_ui : ui_functions {
 			// Build opens placement first (cost is taken on the placement click); every
 			// other producer spends immediately, so say why when it can't.
 			if (c.act != C_BUILD) {
-				if (const char* r = block_reason(c)) { raise_error(r); return true; }
+				if (err_kind r = block_reason(c)) { raise_error(r); return true; }
 			}
 			switch (c.act) {
 			case C_MOVE:      start_target(T_MOVE); break;
@@ -648,8 +748,8 @@ struct play_ui : ui_functions {
 
 	void place_pending(int mx, int my) {
 		// Cost is taken now, at placement — report a shortfall and keep the ghost up.
-		if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error("Not enough minerals"); return; }
-		if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error("Not enough vespene gas"); return; }
+		if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error(E_MINERALS); return; }
+		if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error(E_GAS); return; }
 		int tx, ty;
 		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
@@ -810,6 +910,25 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	// Minimap with blinking red blips at recent under-attack locations (drawn on top of
+	// the base minimap, which the engine renders after draw_callback).
+	void draw_minimap(uint8_t* data, size_t data_pitch) override {
+		ui_functions::draw_minimap(data, data_pitch);
+		if (alerts.empty() || (event_tick / 8) & 1) return;   // blink: hidden half the phase
+		rect area = get_minimap_area();
+		if (area.from == area.to || (size_t)(area.to.x - area.from.x) != game_st.map_tile_width) return;
+		if (alert_color < 0) alert_color = nearest_palette_color(255, 40, 40);
+		for (auto& a : alerts) {
+			int mx = area.from.x + a.pos.x / 32, my = area.from.y + a.pos.y / 32;
+			for (int dy = -1; dy <= 1; ++dy)
+				for (int dx = -1; dx <= 1; ++dx) {
+					int px = mx + dx, py = my + dy;
+					if (px >= area.from.x && px < area.to.x && py >= area.from.y && py < area.to.y)
+						data[(size_t)py * data_pitch + px] = (uint8_t)alert_color;
+				}
+		}
+	}
+
 	// Placement preview: a faded, tinted silhouette of the actual building, plus a
 	// footprint outline so the exact tiles it will occupy are unambiguous.
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
@@ -884,6 +1003,7 @@ struct play_ui : ui_functions {
 	void update() {
 		ui_functions::update();   // processes input first, so edge_scroll sees the fresh cursor
 		edge_scroll();
+		poll_events();
 		refresh_card();
 	}
 

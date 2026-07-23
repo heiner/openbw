@@ -1462,7 +1462,7 @@ struct ui_functions: ui_util_functions {
 		return area;
 	}
 
-	void draw_minimap(uint8_t* data, size_t data_pitch) {
+	virtual void draw_minimap(uint8_t* data, size_t data_pitch) {
 		auto area = get_minimap_area();
 		size_t minimap_width = area.to.x - area.from.x;
 		size_t minimap_height = area.to.y - area.from.y;
