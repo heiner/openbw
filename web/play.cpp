@@ -204,6 +204,38 @@ int run_nettest(const char* data_dir, const char* map_file, int my_player, race_
 	bw_cmd w(buf);
 	auto flush = [&]() { apply_bw_commands(afa, my_player, buf.data(), buf.size()); buf.clear(); };
 
+	// --- Terran flying buildings: lift off (opcode 47). Must run before the town
+	// hall starts producing — the engine refuses to lift a building that's busy. ---
+	if (my_race == race_t::terran) {
+		unit_t* ca = find_unit_of_type(sa, my_player, UnitTypes::Terran_Command_Center);
+		unit_t* cb = find_unit_of_type(sb, my_player, UnitTypes::Terran_Command_Center);
+		if (ca && cb) {
+			uint16_t id = afa.get_unit_id(ca).raw_value;
+			xy p0 = ca->sprite->position;
+			w.select(&id, 1); w.liftoff(p0); flush();
+			afb.action_select(my_player, cb);
+			afb.action_liftoff(my_player, cb->sprite->position);
+			check("lift off");
+			for (int i = 0; i != 80; ++i) { pa.next_frame(); pb.next_frame(); }
+			ui::log("nettest: after lift off, CC grounded = %d (expect 0)\n",
+			        (int)afa.u_grounded_building(ca));
+
+			// Land it again (opcode 12 with the BuildingLand order and the building's own
+			// type) so the rest of the test has a working town hall.
+			int tx = (p0.x - ca->unit_type->placement_size.x / 2) / 32;
+			int ty = (p0.y - ca->unit_type->placement_size.y / 2) / 32;
+			uint16_t id2 = afa.get_unit_id(ca).raw_value;
+			w.select(&id2, 1); w.build(Orders::BuildingLand, ca->unit_type->id, tx, ty); flush();
+			afb.action_select(my_player, cb);
+			afb.action_build(my_player, afb.get_order_type(Orders::BuildingLand), cb->unit_type,
+			                 {(size_t)tx, (size_t)ty});
+			check("land");
+			for (int i = 0; i != 200; ++i) { pa.next_frame(); pb.next_frame(); }
+			ui::log("nettest: after landing, CC grounded = %d (expect 1)\n",
+			        (int)afa.u_grounded_building(ca));
+		}
+	}
+
 	// --- train (or morph) a worker from the town hall: opcodes 9 + 31/35 ---
 	UnitTypes townhall = my_race == race_t::zerg ? UnitTypes::Zerg_Larva
 	                   : my_race == race_t::protoss ? UnitTypes::Protoss_Nexus

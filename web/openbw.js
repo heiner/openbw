@@ -552,7 +552,9 @@ async function boot(session) {
   // ︎ text selector keeps the glyphs monochrome. A big "Paused" banner also shows.
   const pauseBtn = $('pausebtn'), pausedEl = $('paused');
   const pausedSpan = pausedEl.querySelector('span');
-  pauseBtn.style.display = 'block';
+  // No pause in multiplayer: lockstep means a local pause just stops feeding turns and
+  // stalls the opponent, who sees "Waiting for opponent" until you resume.
+  pauseBtn.style.display = link ? 'none' : 'block';
   // One centre banner serves every state: an explicit message (disconnect/desync) wins,
   // otherwise paused, otherwise blocked waiting on a peer's turn.
   let bannerText = null, bannerOverride = '', bannerTimer = 0;

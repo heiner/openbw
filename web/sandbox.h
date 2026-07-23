@@ -168,6 +168,7 @@ struct bw_cmd {
 	void type(int op, UnitTypes t) { begin(op); u16((int)t); end(); }// 31 train, 35 morph, 53 morph building
 	void id8(int op, int v) { begin(op); u8(v); end(); }             // 48 research, 50 upgrade
 	void cancel_slot(int slot) { begin(32); u16(slot); end(); }      // 32 cancel build queue
+	void liftoff(xy pos) { begin(47); u16(pos.x); u16(pos.y); end(); }   // 47 building lift off
 };
 
 // Apply one player's framed batch, in order, through the engine's action reader.
@@ -219,6 +220,7 @@ struct play_ui : ui_functions {
 	build_kit kit;
 
 	const unit_type_t* pending_build = nullptr;   // building awaiting a placement click
+	bool pending_land = false;                    // that placement is a flying building landing
 	bool targeting = false;                       // an order awaiting a target click
 	int mouse_x = -1, mouse_y = -1;   // off-screen until the first move, so edge-scroll stays idle at startup
 	int sound_rotation = 0;                       // rotates through a unit's ack sound range
@@ -238,7 +240,8 @@ struct play_ui : ui_functions {
 	enum cmd_act { C_MOVE, C_STOP, C_ATTACK, C_GATHER, C_HOLD, C_PATROL,
 	               C_BUILDMENU, C_BUILD, C_TRAIN, C_MORPH, C_MORPHBLDG, C_STIM, C_SIEGE, C_UNSIEGE, C_REPAIR,
 	               C_SELECT,     // select the player's units of cmd.ut (SCVs / Probes / Larvae)
-	               C_RALLY, C_RESEARCH, C_UPGRADE };
+	               C_RALLY, C_RESEARCH, C_UPGRADE,
+	               C_LIFT, C_LAND };   // Terran flying buildings
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
 	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None; };
 	a_vector<cmd_t> card;
@@ -254,6 +257,7 @@ struct play_ui : ui_functions {
 	int alert_color = -1;                         // minimap flash palette index (lazy)
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
 	int event_tick = 0;                           // local tick for the flash blink phase
+	static const int ALERT_TTL = 150;             // how long a minimap ping stays up
 	struct alert_t { xy pos; int ttl; };
 	a_vector<alert_t> alerts;                     // active minimap flash markers
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
@@ -329,6 +333,7 @@ struct play_ui : ui_functions {
 	void cmd_order(Orders o, xy pos, unit_t* target, bool q) {
 		cmds.order(o, pos, get_unit_id(target).raw_value, q);
 	}
+	void cmd_liftoff(xy pos) { cmds.liftoff(pos); }
 	void cmd_bare(int opcode) { cmds.bare(opcode); }
 	void cmd_queued(int opcode, bool q) { cmds.queued(opcode, q); }
 	void cmd_type(int opcode, UnitTypes t) { cmds.type(opcode, t); }
@@ -371,6 +376,27 @@ struct play_ui : ui_functions {
 	// (annoyed) lines when the same single unit is clicked repeatedly.
 	void on_selection(bool) override {
 		if (current_selection.size() > 12) current_selection.resize(12);   // BW's 12-unit cap
+		// BW's other selection rule: a selection is either your own units, or exactly one
+		// unit that isn't yours. You can't box up an enemy army to inspect it, and you
+		// can't mix theirs in with yours — dragging over both keeps only yours.
+		{
+			a_vector<unit_t*> own;
+			for (auto uid : current_selection) {
+				unit_t* u = get_unit(uid);
+				if (u && u->owner == my_player) own.push_back(u);
+			}
+			if (!own.empty()) {
+				if (own.size() != current_selection.size()) {
+					current_selection_clear();
+					for (unit_t* u : own) current_selection_add(u);
+				}
+			} else if (current_selection.size() > 1) {
+				unit_t* first = nullptr;
+				for (auto uid : current_selection) { first = get_unit(uid); if (first) break; }
+				current_selection_clear();
+				if (first) current_selection_add(first);
+			}
+		}
 		menu = 0;
 		last_recalled_group = -1;   // a fresh selection resets group double-tap tracking
 		unit_t* u = primary_selected();
@@ -502,7 +528,13 @@ struct play_ui : ui_functions {
 		} else {
 			add_producible(u, false);   // train/morph units, upgrades, research
 		}
-		if (building) {
+		// Terran buildings that fly: lift off when landed, land when airborne. A lifted
+		// building can't produce or rally, so it only ever offers Land.
+		if (ut_flying_building(u)) {
+			if (u_grounded_building(u)) card.push_back({pick_key("Lift"), "Lift Off", C_LIFT, U::None});
+			else card.push_back({pick_key("Land"), "Land", C_LAND, U::None});
+		}
+		if (building && u_grounded_building(u)) {
 			bool produces = false;
 			for (auto& c : card) if (c.act == C_TRAIN || c.act == C_MORPHBLDG) { produces = true; break; }
 			if (produces) card.push_back({pick_key("Rally"), "Set Rally Point", C_RALLY, U::None});
@@ -751,13 +783,19 @@ struct play_ui : ui_functions {
 		bool merged = false;
 		for (auto& a : alerts) {
 			int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
-			if (dx * dx + dy * dy < 256 * 256) { a.ttl = 90; merged = true; break; }   // ~8 tiles
+			if (dx * dx + dy * dy < 256 * 256) { a.ttl = ALERT_TTL; merged = true; break; }   // ~8 tiles
 		}
-		if (!merged && alerts.size() < 8) alerts.push_back({pos, 90});
-		if (alert_cooldown == 0 && under_attack_sound >= 0) {
+		if (!merged && alerts.size() < 8) alerts.push_back({pos, ALERT_TTL});
+		// Don't nag: the original stays quiet while you're already looking at the fight,
+		// and leaves a long gap between announcements. Without both of these a sustained
+		// battle re-triggers the advisor endlessly.
+		bool on_screen = pos.x >= screen_pos.x && pos.y >= screen_pos.y &&
+		                 pos.x < screen_pos.x + (int)screen_width &&
+		                 pos.y < screen_pos.y + (int)screen_height;
+		if (alert_cooldown == 0 && under_attack_sound >= 0 && !on_screen) {
 			// On-screen centre → full volume, so the advisor is audible wherever the hit is.
 			play_sound(under_attack_sound, screen_pos + xy((int)screen_width / 2, (int)screen_height / 2), nullptr, false);
-			alert_cooldown = 300;   // ~5 s at 60 fps
+			alert_cooldown = 1800;   // ~30 s at 60 fps
 		}
 	}
 	// Once per frame: fire unit-ready voices on completion and raise under-attack alerts
@@ -796,7 +834,11 @@ struct play_ui : ui_functions {
 		return hovering_unit() ? 3 : 0;
 	}
 
-	void start_target(targ_t t) { pending_build = nullptr; targeting = true; pending_targ = t; }
+	void start_target(targ_t t) { pending_build = nullptr; pending_land = false; targeting = true; pending_targ = t; }
+
+	// Helpers for the flying-building commands, which act on the selected building itself.
+	xy u_pos_of_selected() { unit_t* u = primary_selected(); return u ? u->sprite->position : xy(); }
+	UnitTypes landing_type() { unit_t* u = primary_selected(); return u ? u->unit_type->id : UnitTypes::None; }
 
 	// Execute the command bound to `key` in the current card. Returns false if
 	// the key isn't a command (so base key handling can run).
@@ -804,10 +846,14 @@ struct play_ui : ui_functions {
 		for (auto& c : card) {
 			if (c.key != key) continue;
 			if (!c.enabled) return true;   // grayed out — consume the key, do nothing
-			// Build opens placement first (cost is taken on the placement click); every
-			// other producer spends immediately, so say why when it can't.
-			if (c.act != C_BUILD) {
+			// Only the commands that actually spend are gated here. Build is excluded
+			// because its cost is taken on the placement click, and Land carries a unit
+			// type (the building's own) but costs nothing.
+			switch (c.act) {
+			case C_TRAIN: case C_MORPH: case C_MORPHBLDG: case C_RESEARCH: case C_UPGRADE:
 				if (err_kind r = block_reason(c)) { raise_error(r); return true; }
+				break;
+			default: break;
 			}
 			switch (c.act) {
 			case C_MOVE:      start_target(T_MOVE); break;
@@ -829,6 +875,9 @@ struct play_ui : ui_functions {
 			case C_STIM:      sync_selection(); cmd_bare(54); break;
 			case C_SIEGE:     sync_selection(); cmd_queued(38, key_shift()); break;
 			case C_UNSIEGE:   sync_selection(); cmd_queued(37, key_shift()); break;
+			case C_LIFT:      sync_selection(); cmd_liftoff(u_pos_of_selected()); break;
+			case C_LAND:      pending_build = get_unit_type(c.ut != UnitTypes::None ? c.ut : landing_type());
+			                  pending_land = true; menu = 0; refresh_card(); break;
 			}
 			return true;
 		}
@@ -883,14 +932,18 @@ struct play_ui : ui_functions {
 	}
 
 	void place_pending(int mx, int my) {
-		// Cost is taken now, at placement — report a shortfall and keep the ghost up.
-		if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error(E_MINERALS); return; }
-		if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error(E_GAS); return; }
+		// Landing an existing building is free; only a real build spends, and the cost is
+		// taken now, at placement — report a shortfall and keep the ghost up.
+		if (!pending_land) {
+			if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error(E_MINERALS); return; }
+			if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error(E_GAS); return; }
+		}
 		int tx, ty;
 		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
-		cmd_build(kit.build_order, pending_build, tx, ty);
+		cmd_build(pending_land ? Orders::BuildingLand : kit.build_order, pending_build, tx, ty);
 		pending_build = nullptr;   // one-shot; re-open the menu to place another
+		pending_land = false;
 	}
 
 	// Precompute the two tint tables (built once): each maps a source palette
@@ -1048,20 +1101,30 @@ struct play_ui : ui_functions {
 
 	// Minimap with blinking red blips at recent under-attack locations (drawn on top of
 	// the base minimap, which the engine renders after draw_callback).
+	// Minimap ping, like the original: four bracket lines sweeping inward onto the spot.
+	// A converging animation catches the eye far better than a static blip, and repeating
+	// the sweep keeps drawing attention for as long as the alert lives.
 	void draw_minimap(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_minimap(data, data_pitch);
-		if (alerts.empty() || (event_tick / 8) & 1) return;   // blink: hidden half the phase
+		if (alerts.empty()) return;
 		rect area = get_minimap_area();
 		if (area.from == area.to || (size_t)(area.to.x - area.from.x) != game_st.map_tile_width) return;
 		if (alert_color < 0) alert_color = nearest_palette_color(255, 40, 40);
+		auto plot = [&](int px, int py) {
+			if (px >= area.from.x && px < area.to.x && py >= area.from.y && py < area.to.y)
+				data[(size_t)py * data_pitch + px] = (uint8_t)alert_color;
+		};
+		const int CYCLE = 30, R0 = 12, ARM = 4;
 		for (auto& a : alerts) {
 			int mx = area.from.x + a.pos.x / 32, my = area.from.y + a.pos.y / 32;
-			for (int dy = -1; dy <= 1; ++dy)
-				for (int dx = -1; dx <= 1; ++dx) {
-					int px = mx + dx, py = my + dy;
-					if (px >= area.from.x && px < area.to.x && py >= area.from.y && py < area.to.y)
-						data[(size_t)py * data_pitch + px] = (uint8_t)alert_color;
-				}
+			int r = R0 - (((ALERT_TTL - a.ttl) % CYCLE) * R0) / CYCLE;   // sweeps R0 -> 0
+			for (int i = 0; i <= ARM; ++i) {
+				plot(mx - r + i, my - r); plot(mx - r, my - r + i);      // corner brackets
+				plot(mx + r - i, my - r); plot(mx + r, my - r + i);
+				plot(mx - r + i, my + r); plot(mx - r, my + r - i);
+				plot(mx + r - i, my + r); plot(mx + r, my + r - i);
+			}
+			plot(mx, my); plot(mx - 1, my); plot(mx + 1, my); plot(mx, my - 1); plot(mx, my + 1);
 		}
 	}
 
@@ -1158,7 +1221,7 @@ struct play_ui : ui_functions {
 		}
 		if (e.type == ev::type_mouse_button_down && e.button == 3) {
 			if (pending_build || targeting || menu) {   // cancel pending mode / submenu
-				pending_build = nullptr; targeting = false; menu = 0; refresh_card();
+				pending_build = nullptr; pending_land = false; targeting = false; menu = 0; refresh_card();
 				return true;
 			}
 			if (current_selection.empty()) return false;   // let base pan
@@ -1177,7 +1240,7 @@ struct play_ui : ui_functions {
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.scancode == 41) {   // Escape: back out of any pending mode / submenu
-			pending_build = nullptr; targeting = false; menu = 0; refresh_card();
+			pending_build = nullptr; pending_land = false; targeting = false; menu = 0; refresh_card();
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.sym >= '0' && e.sym <= '9') {
