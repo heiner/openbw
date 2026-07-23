@@ -169,3 +169,8 @@ OPENBW_EXPORT(openbw_error) const char* openbw_error() { return g_ui ? g_ui->err
 
 // Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
 OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }
+
+// Toggle the selected-unit order/rally line overlay (off by default).
+OPENBW_EXPORT(openbw_set_order_lines) void openbw_set_order_lines(int on) {
+	if (g_ui) g_ui->show_order_lines = on != 0;
+}

@@ -156,6 +156,7 @@ struct play_ui : ui_functions {
 	a_string resources_text;                      // minerals/gas/supply HUD, rebuilt per frame
 	a_string error_text, error_status_text;       // last blocked-command reason, for the JS toast
 	int error_seq = 0;                            // bumped whenever error_text is (re)set
+	bool show_order_lines = false;                   // draw selected-unit order/rally lines (off by default)
 	int line_move_color = -1, line_atk_color = -1;   // order/rally line palette indices (lazy)
 	// Event feedback: unit-ready voices on completion, "under attack" voice + minimap flash.
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
@@ -893,7 +894,7 @@ struct play_ui : ui_functions {
 	// Selected units' orders as lines (green move/rally, red attack) with a diamond at
 	// each destination, so where things are headed — and a producer's rally — is visible.
 	void draw_order_lines(uint8_t* data, size_t data_pitch) {
-		if (current_selection.empty()) return;
+		if (!show_order_lines || current_selection.empty()) return;
 		if (line_move_color < 0) {
 			line_move_color = nearest_palette_color(40, 240, 40);
 			line_atk_color  = nearest_palette_color(240, 40, 40);

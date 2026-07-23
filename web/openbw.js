@@ -260,6 +260,7 @@ async function boot(race) {
   helpBtn.style.display = 'block';
   helpBtn.onclick = (e) => {
     e.stopPropagation();
+    $('settings').style.display = 'none';
     helpPop.style.display = helpPop.style.display === 'block' ? 'none' : 'block';
   };
   document.addEventListener('click', (e) => {
@@ -360,6 +361,28 @@ async function boot(race) {
   x._initialize();
   x.openbw_init(...winSize(), race, 0);
   wireInput(canvas, x);
+
+  // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
+  // persists. Wired here because it drives the wasm, which is now instantiated.
+  const settingsBtn = $('settingsbtn'), settingsPop = $('settings'), optLines = $('opt-lines');
+  settingsBtn.style.display = 'block';
+  let showLines = false;
+  try { showLines = localStorage.getItem('openbw-order-lines') === '1'; } catch {}
+  optLines.checked = showLines;
+  x.openbw_set_order_lines(showLines ? 1 : 0);
+  settingsBtn.onclick = (e) => {
+    e.stopPropagation();
+    helpPop.style.display = 'none';
+    settingsPop.style.display = settingsPop.style.display === 'block' ? 'none' : 'block';
+  };
+  optLines.onchange = () => {
+    try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
+    x.openbw_set_order_lines(optLines.checked ? 1 : 0);
+  };
+  document.addEventListener('click', (e) => {
+    if (settingsPop.style.display === 'block' && e.target !== settingsBtn && !settingsPop.contains(e.target))
+      settingsPop.style.display = 'none';
+  });
 
   // Follow the window size (debounced). The frame loop below picks up the new
   // framebuffer dimensions automatically.

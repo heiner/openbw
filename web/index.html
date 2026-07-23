@@ -87,6 +87,16 @@
     background: rgba(0,0,0,.5); color: #e2e8f0; font: 700 16px system-ui, sans-serif;
     line-height: 30px; cursor: pointer; }
   #helpbtn:hover { background: rgba(0,0,0,.72); }
+  #settingsbtn { position: fixed; top: 8px; left: 88px; z-index: 5; display: none;
+    width: 30px; height: 30px; padding: 0; margin: 0; border: 0; border-radius: 8px;
+    background: rgba(0,0,0,.5); color: #e2e8f0; font-size: 16px; line-height: 30px; cursor: pointer; }
+  #settingsbtn:hover { background: rgba(0,0,0,.72); }
+  #settings { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 320px;
+    padding: 12px 16px; border-radius: 10px; background: rgba(15,23,42,.96); color: #cbd5e1;
+    font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 10px 34px rgba(0,0,0,.55); }
+  #settings h3 { margin: 0 0 8px; font-size: 13px; color: #e2e8f0; }
+  #settings label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 4px 0; }
+  #settings input { accent-color: #38bdf8; }
   #help { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 400px;
     padding: 12px 16px; border-radius: 10px; background: rgba(15,23,42,.96); color: #cbd5e1;
     font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 10px 34px rgba(0,0,0,.55); }
@@ -105,6 +115,11 @@
 <div id="resources"></div>
 <button id="mute" title="Mute sound">🔊</button>
 <button id="helpbtn" title="Controls">?</button>
+<button id="settingsbtn" title="Settings">⚙</button>
+<div id="settings">
+  <h3>Settings</h3>
+  <label><input type="checkbox" id="opt-lines"> Show order &amp; rally lines</label>
+</div>
 <div id="help">
   <h3>Controls</h3>
   <div class="row"><kbd>Click</kbd> / drag to select · double-click picks all of a type · <kbd>Shift</kbd>-click adds</div>
