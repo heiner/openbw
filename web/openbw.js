@@ -428,9 +428,19 @@ async function boot(session) {
     try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
     x.openbw_set_order_lines(optLines.checked ? 1 : 0);
   };
+  // Resign: one confirming click (no blocking dialog), then concede via the sim.
+  const resignBtn = $('opt-resign');
+  let resignArmed = false;
+  resignBtn.onclick = () => {
+    if (!resignArmed) { resignArmed = true; resignBtn.textContent = 'Confirm — resign?'; return; }
+    resignArmed = false; resignBtn.textContent = 'Resign game';
+    settingsPop.style.display = 'none';
+    x.openbw_resign();
+  };
   document.addEventListener('click', (e) => {
     if (settingsPop.style.display === 'block' && e.target !== settingsBtn && !settingsPop.contains(e.target))
       settingsPop.style.display = 'none';
+    if (resignArmed && e.target !== resignBtn) { resignArmed = false; resignBtn.textContent = 'Resign game'; }
   });
 
   // Follow the window size (debounced). The frame loop below picks up the new

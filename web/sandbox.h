@@ -171,6 +171,14 @@ struct bw_cmd {
 	void liftoff(xy pos) { begin(47); u16(pos.x); u16(pos.y); end(); }   // 47 building lift off
 	void unload_all(bool q) { begin(40); u8(q ? 1 : 0); end(); }     // 40 unload all cargo
 	void unload(uint16_t target) { begin(41); u16(target); end(); } // 41 unload one unit
+	void cloak() { begin(33); u8(0); end(); }                        // 33 cloak
+	void decloak() { begin(34); u8(0); end(); }                      // 34 decloak
+	void train_fighter() { begin(39); end(); }                       // 39 build interceptor/scarab
+	void burrow(bool q) { begin(44); u8(q ? 1 : 0); end(); }         // 44 burrow
+	void unburrow() { begin(45); u8(0); end(); }                     // 45 unburrow
+	void morph_archon() { begin(42); end(); }                        // 42 merge archon
+	void morph_dark_archon() { begin(90); end(); }                   // 90 merge dark archon
+	void player_leave(int reason) { begin(87); u8(reason); end(); }  // 87 leave (resign)
 };
 
 // Apply one player's framed batch, in order, through the engine's action reader.
@@ -244,7 +252,11 @@ struct play_ui : ui_functions {
 	               C_SELECT,     // select the player's units of cmd.ut (SCVs / Probes / Larvae)
 	               C_RALLY, C_RESEARCH, C_UPGRADE,
 	               C_LIFT, C_LAND,      // Terran flying buildings
-	               C_UNLOAD, C_UNLOADALL };   // eject cargo from a bunker / transport
+	               C_UNLOAD, C_UNLOADALL,     // eject cargo from a bunker / transport
+	               C_BURROW, C_UNBURROW,      // Zerg burrow
+	               C_CLOAK, C_DECLOAK,        // Wraith / Ghost cloak
+	               C_FIGHTER,                 // Carrier interceptor / Reaver scarab
+	               C_ARCHON, C_DARCHON };     // High / Dark Templar merges
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
 	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None;
 	               uint16_t unit = 0; };   // target unit id (C_UNLOAD)
@@ -269,6 +281,7 @@ struct play_ui : ui_functions {
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
 	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
 	int outcome = 0;                              // 0 undecided, 1 victory, 2 defeat
+	bool competitive = false;                     // true only with an opponent (multiplayer)
 
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
@@ -424,12 +437,13 @@ struct play_ui : ui_functions {
 	// a defeat has to be inferred from someone else having won. Both peers run the same
 	// deterministic sim, so a 1v1 reaches the same verdict on the same frame for free.
 	void on_victory_state(int owner, int state) override {
-		if (outcome || state == 0) return;
+		// Single-player is a sandbox — a lone melee player "wins" instantly, so ignore it.
+		if (!competitive || outcome || state == 0) return;
 		if (owner == my_player) outcome = state >= 3 ? 1 : 2;
 		else if (state >= 3) outcome = 2;          // someone else won, so we lost
 	}
 	void check_last_standing() {
-		if (outcome) return;
+		if (!competitive || outcome) return;
 		if (st.players[my_player].victory_state >= 3) { outcome = 1; return; }
 		for (int i = 0; i != 8; ++i)
 			if (i != my_player && st.players[i].victory_state >= 3) { outcome = 2; return; }
@@ -575,6 +589,24 @@ struct play_ui : ui_functions {
 			card.push_back({'e', "Siege Mode", C_SIEGE, U::None});
 		else if (id == U::Terran_Siege_Tank_Siege_Mode || id == U::Terran_Siege_Tank_Siege_Mode_Turret)
 			card.push_back({'d', "Tank Mode", C_UNSIEGE, U::None});
+		// Burrow: Zerg ground units once Burrowing is researched (Lurkers innately).
+		if (ut_can_burrow(u) && (unit_is(u, U::Zerg_Lurker) || player_has_researched(my_player, TechTypes::Burrowing))) {
+			if (u_burrowed(u)) card.push_back({pick_key("Unburrow"), "Unburrow", C_UNBURROW, U::None});
+			else card.push_back({pick_key("Burrow"), "Burrow", C_BURROW, U::None});
+		}
+		// Cloak: Wraith / Ghost with the matching tech researched.
+		bool cloakable = (id == U::Terran_Wraith && player_has_researched(my_player, TechTypes::Cloaking_Field)) ||
+		                 (id == U::Terran_Ghost && player_has_researched(my_player, TechTypes::Personnel_Cloaking));
+		if (cloakable) {
+			if (u_cloaked(u)) card.push_back({pick_key("Decloak"), "Decloak", C_DECLOAK, U::None});
+			else card.push_back({pick_key("Cloak"), "Cloak", C_CLOAK, U::None});
+		}
+		// Carrier interceptors / Reaver scarabs are built by the unit itself.
+		if (unit_is_carrier(u)) card.push_back({pick_key("Interceptor"), "Build Interceptor", C_FIGHTER, U::Protoss_Interceptor});
+		else if (unit_is_reaver(u)) card.push_back({pick_key("Scarab"), "Build Scarab", C_FIGHTER, U::Protoss_Scarab});
+		// Two templar merge into an archon.
+		if (id == U::Protoss_High_Templar) card.push_back({pick_key("Archon"), "Merge Archon", C_ARCHON, U::Protoss_Archon});
+		else if (id == U::Protoss_Dark_Templar) card.push_back({pick_key("Dark Archon"), "Dark Archon", C_DARCHON, U::Protoss_Dark_Archon});
 		// Cargo: a bunker/transport shows each carried unit (click its icon to eject just
 		// that one) plus an Unload button that ejects everything.
 		if (unit_provides_space(u)) {
@@ -775,6 +807,12 @@ struct play_ui : ui_functions {
 		return E_NONE;
 	}
 
+	// Resign. In a 1v1 this leaves through the command stream (opcode 87) so both peers
+	// apply it deterministically — we're marked defeated and, with only the opponent left,
+	// the melee triggers hand them the win. Solo (sandbox, no verdict system), just show
+	// defeat locally.
+	void resign() { if (competitive) cmds.player_leave(1); else outcome = 2; }
+
 	// Cancel the status chip the host clicked (0 = the one in progress), refunding it.
 	// Training queues cancel by slot; a research/upgrade in progress has its own action.
 	void cancel_queue_slot(int slot) {
@@ -928,6 +966,13 @@ struct play_ui : ui_functions {
 			                  pending_land = true; menu = 0; refresh_card(); break;
 			case C_UNLOAD:    sync_selection(); cmds.unload(c.unit); break;
 			case C_UNLOADALL: sync_selection(); cmds.unload_all(key_shift()); break;
+			case C_BURROW:    sync_selection(); cmds.burrow(key_shift()); break;
+			case C_UNBURROW:  sync_selection(); cmds.unburrow(); break;
+			case C_CLOAK:     sync_selection(); cmds.cloak(); break;
+			case C_DECLOAK:   sync_selection(); cmds.decloak(); break;
+			case C_FIGHTER:   sync_selection(); cmds.train_fighter(); break;
+			case C_ARCHON:    sync_selection(); cmds.morph_archon(); break;
+			case C_DARCHON:   sync_selection(); cmds.morph_dark_archon(); break;
 			}
 			return true;
 		}

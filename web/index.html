@@ -106,6 +106,8 @@
   #settings input { accent-color: #38bdf8; }
   #settings select { margin-left: auto; background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
     border-radius: 6px; padding: 2px 6px; font: inherit; cursor: pointer; }
+  #settings .danger { width: 100%; margin-top: 12px; background: #7a1a1a; color: #fee2e2; }
+  #settings .danger:hover { background: #991b1b; }
   #help { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 400px;
     padding: 12px 16px; border-radius: 10px; background: rgba(15,23,42,.96); color: #cbd5e1;
     font: 13px/1.5 system-ui, sans-serif; box-shadow: 0 10px 34px rgba(0,0,0,.55); }
@@ -182,6 +184,7 @@
       <option value="42">Fastest</option>
     </select>
   </label>
+  <button id="opt-resign" class="danger">Resign game</button>
 </div>
 <div id="help">
   <h3>Controls</h3>

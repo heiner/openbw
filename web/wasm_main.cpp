@@ -84,6 +84,7 @@ static void init_game(int width, int height, int my_slot, const mp_slot* slots, 
 	game_player player(*g_loader);
 	g_ui = new play_ui(std::move(player), my_slot, my_race);
 	g_ui->exit_on_close = false;
+	g_ui->competitive = n > 1;   // victory/defeat only matters with an opponent
 	g_ui->load_data_file = [](a_vector<uint8_t>& data, a_string filename) {
 		(*g_loader)(data, std::move(filename));
 	};
@@ -236,6 +237,9 @@ OPENBW_EXPORT(openbw_start_locations) int openbw_start_locations() {
 	for (size_t i = 0; i != 8; ++i) if (g_ui->game_st.start_locations[i] != xy()) ++n;
 	return n;
 }
+
+// Resign: concede the game. Routed through the command stream so a 1v1 stays in lockstep.
+OPENBW_EXPORT(openbw_resign) void openbw_resign() { if (g_ui) g_ui->resign(); }
 
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
 
