@@ -509,9 +509,9 @@ async function boot(session) {
   // not a bug; raising `delay` trades input lag for it. In real play both windows are
   // visible and this never applies — but two tabs in one window will crawl.
   const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000;
-  let stepTimer, stepClock = performance.now(), lastProgress = performance.now();
+  let stepTimer, over = false, stepClock = performance.now(), lastProgress = performance.now();
   const stepLoop = () => {
-    if (!paused) {
+    if (!paused && !over) {
       const now = performance.now();
       if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
       let budget = Math.min(Math.floor((now - stepClock) / stepMs), MAX_CATCHUP);
@@ -520,6 +520,13 @@ async function boot(session) {
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;
       if (stepped) lastProgress = now;
+      // Victory/defeat comes straight out of the shared sim, so both peers reach the
+      // same verdict on the same frame without exchanging anything. Stop stepping once
+      // it's decided — rendering and panning keep working so you can look around.
+      if (stepped && !over) {
+        const o = x.openbw_outcome();
+        if (o) { over = true; setBanner(o === 1 ? 'Victory!' : 'Defeat', 0); }
+      }
       // Hysteresis: only claim we're waiting after a sustained gap with no progress.
       // Reacting to a single late turn made the banner flicker.
       waiting = !!link && !dropped && (now - lastProgress) > 1500;

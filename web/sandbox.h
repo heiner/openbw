@@ -264,6 +264,7 @@ struct play_ui : ui_functions {
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
 	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
+	int outcome = 0;                              // 0 undecided, 1 victory, 2 defeat
 
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
@@ -412,6 +413,25 @@ struct play_ui : ui_functions {
 		else
 			play_unit_ack(u, ut->first_what_sound, ut->last_what_sound);
 		refresh_card();
+	}
+
+	// The engine's melee triggers decide the winner and report it here (victory_state >= 3).
+	// Note they only ever mark the *winner*: a wiped-out player's victory_state stays 0, so
+	// a defeat has to be inferred from someone else having won. Both peers run the same
+	// deterministic sim, so a 1v1 reaches the same verdict on the same frame for free.
+	void on_victory_state(int owner, int state) override {
+		if (outcome || state == 0) return;
+		if (owner == my_player) outcome = state >= 3 ? 1 : 2;
+		else if (state >= 3) outcome = 2;          // someone else won, so we lost
+	}
+	void check_last_standing() {
+		if (outcome) return;
+		if (st.players[my_player].victory_state >= 3) { outcome = 1; return; }
+		for (int i = 0; i != 8; ++i)
+			if (i != my_player && st.players[i].victory_state >= 3) { outcome = 2; return; }
+		// Direct defeat signal, in case the triggers haven't resolved yet: nothing left.
+		if (events_seeded && st.players[my_player].initially_active &&
+		    count_units(st, my_player) == 0) outcome = 2;
 	}
 
 	int nearest_palette_color(int r, int g, int b) {
@@ -830,6 +850,7 @@ struct play_ui : ui_functions {
 			last_life[id] = life;
 		}
 		events_seeded = true;
+		check_last_standing();
 	}
 
 	// Is there a unit under the current cursor position?

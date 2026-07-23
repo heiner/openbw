@@ -168,6 +168,41 @@ int run_fogtest(const char* data_dir, const char* map_file, int frames) {
 	return 0;
 }
 
+// Win/lose probe: wipe out player 1 in a 2-player melee and confirm the engine's melee
+// triggers declare player 0 the winner (victory_state >= 3) and player 1 defeated.
+int run_wintest(const char* data_dir, const char* map_file, int wipe, int frames) {
+	auto load = data_loading::data_files_directory(data_dir);
+	game_player p(load);
+	mp_slot slots[2] = { {0, race_t::terran}, {1, race_t::protoss} };
+	{ data_loading::mpq_file<> m(map_file); setup_melee_slots(p.st(), m, slots, 2); }
+	state& st = p.st();
+	action_state as; action_functions af(st, as);
+
+	for (int i = 0; i != 30; ++i) p.next_frame();
+	ui::log("wintest: start   p0 victory_state=%d p1 victory_state=%d (both expect 0)\n",
+	        st.players[0].victory_state, st.players[1].victory_state);
+
+	// Collect first — killing mutates the list we'd be iterating.
+	a_vector<unit_t*> doomed;
+	for (unit_t* u : ptr(st.player_units[wipe])) doomed.push_back(u);
+	ui::log("wintest: wiping %d units of player %d\n", (int)doomed.size(), wipe);
+	for (unit_t* u : doomed) af.kill_unit(u);
+
+	for (int i = 0; i != frames; ++i) p.next_frame();
+	ui::log("wintest: end     p0 victory_state=%d (expect >=3 win) p1 victory_state=%d (expect 1-2 loss)\n",
+	        st.players[0].victory_state, st.players[1].victory_state);
+	// Mirror the rule play_ui uses: the survivor is told it won, and the wiped player has
+	// to infer defeat from that (the engine never sets its own victory_state).
+	int other = wipe == 0 ? 1 : 0;
+	int survivor_outcome = af.player_won(other) ? 1 : 0;
+	int wiped_outcome = af.player_won(other) ? 2 : (count_units(st, wipe) == 0 ? 2 : 0);
+	bool ok = survivor_outcome == 1 && wiped_outcome == 2;
+	ui::log("wintest: survivor outcome=%d (expect 1 victory), wiped outcome=%d (expect 2 defeat)\n",
+	        survivor_outcome, wiped_outcome);
+	ui::log("wintest: %s\n", ok ? "OK" : "FAILED");
+	return ok ? 0 : 1;
+}
+
 // Lockstep foundation test. Two sims run from the same map and seed: sim A is driven
 // through the BW command-byte writer (the multiplayer path), sim B through direct
 // action_* calls (the path the UI used before). Identical checksums prove the
@@ -420,6 +455,9 @@ int main(int argc, char** argv) {
 	}
 
 	if (getenv("OPENBW_SELFTEST")) return run_selftest(data_dir, map_file, my_player, my_race);
+
+	const char* wintest = getenv("OPENBW_WINTEST");
+	if (wintest) return run_wintest(data_dir, map_file, my_player, atoi(wintest));
 
 	const char* fogtest = getenv("OPENBW_FOGTEST");
 	if (fogtest) return run_fogtest(data_dir, map_file, atoi(fogtest));

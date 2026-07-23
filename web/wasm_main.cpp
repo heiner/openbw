@@ -223,6 +223,10 @@ OPENBW_EXPORT(openbw_init_mp) void openbw_init_mp(int width, int height, int my_
 	init_game(width, height, my_slot, slots.data(), slots.size());
 }
 
+// 0 undecided, 1 victory, 2 defeat. Both peers derive this from the shared deterministic
+// sim, so they agree without exchanging anything.
+OPENBW_EXPORT(openbw_outcome) int openbw_outcome() { return g_ui ? g_ui->outcome : 0; }
+
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
 
 // Desync probe (shared implementation in sandbox.h, so native and wasm can't disagree).
