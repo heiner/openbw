@@ -823,6 +823,25 @@ async function boot(session) {
   requestAnimationFrame(frame);
 }
 
+// Map choice applies to both single-player and multiplayer, so it lives outside the
+// multiplayer panel.
+const mapSelect = $('map-select');
+
+// The title doubles as a way back to a clean URL. An invite link leaves #i=... in the
+// address bar, so a joiner who reloads re-enters the join flow with the *old* code —
+// clicking here drops the fragment and query and forces a genuine reload (dropping a
+// fragment alone is a same-document navigation, which would keep the stale page state).
+{
+  const bare = location.origin + location.pathname;
+  const home = $('home');
+  home.href = bare;
+  home.addEventListener('click', (e) => {
+    e.preventDefault();
+    if (location.href !== bare) location.replace(bare);
+    location.reload();
+  });
+}
+
 // Let the user pick a race (also satisfies the "user gesture" some browsers want).
 $('controls').style.display = 'block';
 setMsg('Choose a race to begin.');
@@ -834,8 +853,9 @@ if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
 for (const b of document.querySelectorAll('#controls button[data-race]')) {
   b.addEventListener('click', () => {
     $('controls').style.display = 'none';
-    const slot = pickStartSlots(1, (MAPS.find((m) => m.file === MAP_LOCAL) || {}).starts || 2)[0];
-    boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: MAP_LOCAL })
+    const file = mapSelect.value;
+    const slot = pickStartSlots(1, (MAPS.find((m) => m.file === file) || {}).starts || 2)[0];
+    boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: file })
       .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
   }, { once: true });
 }
@@ -852,7 +872,7 @@ const MP_DELAY = 4;        // input delay in frames (~170 ms at "fastest")
 const COUNTDOWN = 5, LOCK_AT = 2;
 
 const mp = {
-  map: $('mp-map'), setup: $('mp-setup'),
+  setup: $('mp-setup'),
   host: $('mp-host'), join: $('mp-join'),
   stepInvite: $('mp-step-invite'), inInvite: $('mp-in-invite'), accept: $('mp-accept'),
   stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
@@ -871,7 +891,7 @@ const resolveRace = (r) => (r === -1 ? [0, 1, 2][(Math.random() * 3) | 0] : r);
 const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className = cls; };
 const mpShow = (el, on) => { el.style.display = on ? 'block' : 'none'; };
 
-for (const m of MAPS) mp.map.add(new Option(m.name, m.file));
+for (const m of MAPS) mapSelect.add(new Option(m.name, m.file));
 for (const sel of mp.r) fillRaces(sel);
 
 // Race is picked in the lobby, not before hosting — the handshake only carries the
@@ -895,7 +915,7 @@ function mpResetRole() {                    // let the user try again after a fa
   mpRole = null;
   if (mpLink) { try { mpLink.close(); } catch {} mpLink = null; }
   mp.host.disabled = mp.join.disabled = false;
-  mp.map.disabled = false;
+  mapSelect.disabled = false;
   mpHideSteps();
 }
 
@@ -938,12 +958,12 @@ const mpSendRace = () => {
   if (mpLink) mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value });
 };
 mp.r[0].onchange = mp.r[1].onchange = mpSendRace;
-mp.map.onchange = () => { mpMap = mp.map.value; };
+mapSelect.onchange = () => { mpMap = mapSelect.value; };
 
 function mpCountdown(n) {
   if (n <= LOCK_AT && !mpLocked) {
     mpLocked = true;
-    mp.map.disabled = mp.r[0].disabled = mp.r[1].disabled = true;
+    mapSelect.disabled = mp.r[0].disabled = mp.r[1].disabled = true;
   }
   if (n <= 0) {
     if (mpRole !== 'host') return;          // the joiner starts on the host's `start`
@@ -985,7 +1005,7 @@ mp.host.onclick = async () => {
   if (!mpSetRole('host')) return;         // guard *before* awaiting, or a second click slips in
   try {
     const net = await mpNet();
-    mpMap = mp.map.value;
+    mpMap = mapSelect.value;
     mpSay('Preparing invite…');
     const hash = await mapHash(mpMap);
     mpLink = mpNewLink(net, () => { mpEnterLobby(); mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value }); });
@@ -1023,8 +1043,8 @@ async function mpAcceptInvite(code) {
   const { info, answer } = await mpLink.acceptOffer(code, { race: START_RACE });
   // Same terrain, verified by content — not by filename.
   mpMap = info.map || MAP_LOCAL;
-  mp.map.value = mpMap;
-  mp.map.disabled = true;                 // the host picks the map
+  mapSelect.value = mpMap;
+  mapSelect.disabled = true;              // the host picks the map
   const mine = await mapHash(mpMap).catch(() => null);
   if (!mine || mine !== info.hash) {
     mpSay(`Map mismatch — the host is playing a map this build doesn't have byte-for-byte. ` +
@@ -1042,6 +1062,7 @@ async function mpAcceptInvite(code) {
 
 mp.join.onclick = () => {
   if (!mpSetRole('join')) return;
+  mapSelect.disabled = true;      // the host chooses the map; yours is set from the invite
   mpShow(mp.stepInvite, true);
   mpSay('');
 };
@@ -1059,5 +1080,6 @@ mp.copy.onclick = async () => {
 // show only the response they need to send back.
 if (location.hash.startsWith('#i=')) {
   mpShow(mp.setup, false);
+  mapSelect.disabled = true;      // arriving from an invite: the host already chose
   mpAcceptInvite(location.hash.slice(3)).catch((e) => { mpResetRole(); mpSay(e.message, 'err'); console.error(e); });
 }
