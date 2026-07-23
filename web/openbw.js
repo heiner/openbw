@@ -406,12 +406,14 @@ async function boot(race) {
   const stepLoop = () => { if (!paused) x.openbw_step(); stepTimer = setTimeout(stepLoop, stepMs); };
   stepTimer = setTimeout(stepLoop, stepMs);
 
-  // Pause/resume, shown like a video player (⏸ while running, ▶ while paused).
-  const pauseBtn = $('pausebtn');
+  // Pause/resume, shown like a video player (⏸ while running, ▶ while paused). The
+  // ︎ text selector keeps the glyphs monochrome. A big "Paused" banner also shows.
+  const pauseBtn = $('pausebtn'), pausedEl = $('paused');
   pauseBtn.style.display = 'block';
   const applyPause = () => {
-    pauseBtn.textContent = paused ? '▶️' : '⏸️';
+    pauseBtn.textContent = paused ? '▶︎' : '⏸︎';
     pauseBtn.title = paused ? 'Resume' : 'Pause';
+    pausedEl.style.display = paused ? 'flex' : 'none';
   };
   pauseBtn.onclick = () => { paused = !paused; applyPause(); };
   applyPause();
