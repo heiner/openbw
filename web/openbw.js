@@ -395,11 +395,34 @@ async function boot(race) {
   $('overlay').style.display = 'none';
 
   // Fixed-timestep simulation on a timer, rendering on requestAnimationFrame.
-  // The timer keeps firing (throttled) while the tab is hidden and advances one
-  // frame per call, so returning to the tab resumes at normal speed instead of
-  // fast-forwarding a backlog. rAF is paused while hidden, so we simply don't
-  // render then.
-  setInterval(() => x.openbw_step(), 42);   // ~24 Hz "fastest" game speed
+  // A self-rescheduling timeout (rather than setInterval) advances one frame per fire
+  // — so returning to a hidden tab resumes at normal speed instead of fast-forwarding a
+  // backlog — while letting the interval change on the fly for the speed control. rAF is
+  // paused while hidden, so we simply don't render then. Pausing just skips the step;
+  // rendering and input keep running, so you can still look around and give orders.
+  let paused = false, stepMs = 42;   // 42 ms ≈ 24 Hz "fastest" game speed
+  try { stepMs = +localStorage.getItem('openbw-speed') || 42; } catch {}
+  let stepTimer;
+  const stepLoop = () => { if (!paused) x.openbw_step(); stepTimer = setTimeout(stepLoop, stepMs); };
+  stepTimer = setTimeout(stepLoop, stepMs);
+
+  // Pause/resume, shown like a video player (⏸ while running, ▶ while paused).
+  const pauseBtn = $('pausebtn');
+  pauseBtn.style.display = 'block';
+  const applyPause = () => {
+    pauseBtn.textContent = paused ? '▶️' : '⏸️';
+    pauseBtn.title = paused ? 'Resume' : 'Pause';
+  };
+  pauseBtn.onclick = () => { paused = !paused; applyPause(); };
+  applyPause();
+
+  // Game speed lives in the settings popup; the value is the ms per sim frame.
+  const optSpeed = $('opt-speed');
+  optSpeed.value = String(stepMs);
+  optSpeed.onchange = () => {
+    stepMs = +optSpeed.value || 42;
+    try { localStorage.setItem('openbw-speed', String(stepMs)); } catch {}
+  };
 
   // Command card overlay: openbw_card() returns "title\nKEY\tLabel\n…".
   const cardEl = $('card');
