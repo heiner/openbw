@@ -172,6 +172,14 @@ OPENBW_EXPORT(openbw_res_icon) const uint8_t* openbw_res_icon(int which) {
 	return g_ui ? g_ui->render_res_icon(which) : nullptr;
 }
 
+// Production progress bar (percent, target width) rendered like the in-world health bar,
+// as RGBA; actual size in openbw_progress_bar_w/h.
+OPENBW_EXPORT(openbw_progress_bar) const uint8_t* openbw_progress_bar(int percent, int width) {
+	return g_ui ? g_ui->render_progress_bar(percent, width) : nullptr;
+}
+OPENBW_EXPORT(openbw_progress_bar_w) int openbw_progress_bar_w() { return g_ui ? g_ui->pbar_w : 0; }
+OPENBW_EXPORT(openbw_progress_bar_h) int openbw_progress_bar_h() { return g_ui ? g_ui->pbar_h : 0; }
+
 // Edge-scroll direction for the cursor: 0 none, 1 N, 2 NE, 3 E, 4 SE, 5 S, 6 SW, 7 W, 8 NW.
 OPENBW_EXPORT(openbw_edge) int openbw_edge() { return g_ui ? g_ui->edge_dir : 0; }
 

@@ -1164,6 +1164,41 @@ struct play_ui : ui_functions {
 			it.has_directional_frames ? 12 : 0, nullptr);
 	}
 
+	a_vector<uint8_t> pbar_rgba;   // scratch for the rendered progress bar
+	int pbar_w = 0, pbar_h = 0;
+	// The producer/research progress bar, drawn exactly like the in-world health bar: the
+	// same thpbar.pcx palette entries and the same green bevel gradient, quantised to 3px
+	// segments. `img.hp_bar_colors[ci]` is a palette index; img.wpe expands it to RGB.
+	const uint8_t* render_progress_bar(int percent, int width) {
+		if (percent < 0) percent = 0; else if (percent > 100) percent = 100;
+		int w = width < 19 ? 19 : width;
+		w -= (w - 1) % 3;                        // matches draw_health_bars' width rule
+		int dw = percent * w / 100;              // fill quantised to whole 3px segments
+		if (percent > 0 && dw < 3) dw = 3;
+		else if (dw % 3) dw += (dw % 3 > 1) ? 3 - dw % 3 : -(dw % 3);
+		if (percent == 0) dw = 0;
+		if (dw > w) dw = w;
+		const int h = 5;
+		// Always the "full health" green gradient (production progress doesn't change
+		// colour), notched into little segments by a dark divider every few pixels — the
+		// segmented look of the original bar.
+		const int fill[] = {18, 0, 1, 2, 18};    // green bevel rows
+		const int bg[]   = {18, 15, 16, 17, 18}; // unfilled / divider rows
+		const int SEG = 6;
+		pbar_w = w; pbar_h = h;
+		pbar_rgba.assign((size_t)w * h * 4, 0);
+		for (int y = 0; y != h; ++y)
+			for (int x = 0; x != w; ++x) {
+				bool notch = (x % SEG) == SEG - 1;
+				int ci = notch ? 18 : (x < dw ? fill[y] : bg[y]);   // 18 = dark divider
+				int pi = img.hp_bar_colors.at(ci);
+				uint8_t* px = &pbar_rgba[((size_t)y * w + x) * 4];
+				px[0] = tileset_img.wpe[4 * pi]; px[1] = tileset_img.wpe[4 * pi + 1];
+				px[2] = tileset_img.wpe[4 * pi + 2]; px[3] = 255;
+			}
+		return pbar_rgba.data();
+	}
+
 	// A clipped Bresenham line in screen space (map coords minus the camera).
 	void draw_map_line(uint8_t* data, size_t data_pitch, xy a, xy b, uint8_t color) {
 		int x0 = a.x - screen_pos.x, y0 = a.y - screen_pos.y;

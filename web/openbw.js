@@ -712,7 +712,8 @@ async function boot(session) {
   // every frame, so only rebuild the chips when the item list changes and just move the
   // bar otherwise — rebuilding the whole thing each frame flickers and eats clicks.
   const statusEl = $('status');
-  let lastStatusKey = null, statusBar = null;
+  let lastStatusKey = null, statusBar = null, lastBarPct = -1;
+  const BAR_W = 61;   // internal width; quantised the same way the wasm renderer expects
   const updateStatus = () => {
     const ptr = x.openbw_status();
     const text = ptr ? readCString(ptr) : '';
@@ -720,16 +721,30 @@ async function boot(session) {
     const key = p.slice(1).join('\t');   // the chips (names), independent of progress
     if (key !== lastStatusKey) {
       lastStatusKey = key;
-      statusBar = null;
+      statusBar = null; lastBarPct = -1;
       if (!text) { statusEl.innerHTML = ''; return; }
-      let html = `<span class="bar"><i></i></span>`;
+      // Progress bar is a <canvas> rendered from the same health-bar palette the engine
+      // draws under units, so it matches the original exactly.
+      let html = `<canvas class="bar"></canvas>`;
       // p[1..] are the queued units in order; chip i maps to build-queue slot i-1.
       for (let i = 1; i < p.length; i++)
         html += `<span class="q${i === 1 ? ' cur' : ''}" data-slot="${i - 1}" title="Click to cancel">${p[i]}</span>`;
       statusEl.innerHTML = html;
-      statusBar = statusEl.querySelector('.bar > i');
+      statusBar = statusEl.querySelector('.bar');
     }
-    if (statusBar) statusBar.style.width = (Math.max(0, Math.min(100, parseInt(p[0], 10) || 0))) + '%';
+    if (statusBar) {
+      const pct = Math.max(0, Math.min(100, parseInt(p[0], 10) || 0));
+      if (pct === lastBarPct) return;
+      lastBarPct = pct;
+      const bp = x.openbw_progress_bar(pct, BAR_W);
+      const w = x.openbw_progress_bar_w(), h = x.openbw_progress_bar_h();
+      if (!bp || !w || !h) return;
+      if (statusBar.width !== w || statusBar.height !== h) { statusBar.width = w; statusBar.height = h; }
+      barCanvas.width = w; barCanvas.height = h;
+      const img = barCtx.createImageData(w, h);
+      img.data.set(new Uint8Array(memory.buffer, bp, w * h * 4));
+      statusBar.getContext('2d').putImageData(img, 0, 0);
+    }
   };
   // Cancel a queued item (resources refunded). mousedown, not click: acts on the press
   // and stays reliable even if the chip list happens to rebuild mid-interaction.
