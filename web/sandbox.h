@@ -185,6 +185,9 @@ struct bw_cmd {
 	void morph_archon() { begin(42); end(); }                        // 42 merge archon
 	void morph_dark_archon() { begin(90); end(); }                   // 90 merge dark archon
 	void player_leave(int reason) { begin(87); u8(reason); end(); }  // 87 leave (resign)
+	void cancel_morph() { begin(25); end(); }                        // 25 cancel morph
+	void cancel_nuke() { begin(46); end(); }                         // 46 cancel nuke
+	void cancel_addon() { begin(52); end(); }                        // 52 cancel addon
 };
 
 // Apply one player's framed batch, in order, through the engine's action reader. `rec`
@@ -275,7 +278,8 @@ struct play_ui : ui_functions {
 	               C_CLOAK, C_DECLOAK,        // Wraith / Ghost cloak
 	               C_FIGHTER,                 // Carrier interceptor / Reaver scarab
 	               C_ARCHON, C_DARCHON,       // High / Dark Templar merges
-	               C_SPELL };                 // a targeted spellcaster ability
+	               C_SPELL,                   // a targeted spellcaster ability
+	               C_CANCEL };                // cancel a morph / addon / nuke (opcode in cmd.unit)
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
 	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None;
 	               uint16_t unit = 0; };   // target unit id (C_UNLOAD)
@@ -621,6 +625,11 @@ struct play_ui : ui_functions {
 			{U::Zerg_Defiler, T::Dark_Swarm, O::CastDarkSwarm, false, "Dark Swarm", 'w'},
 			{U::Zerg_Defiler, T::Plague, O::CastPlague, false, "Plague", 'p'},
 			{U::Zerg_Defiler, T::Consume, O::CastConsume, true, "Consume", 'c'},
+			// Building/free abilities. Scanner Sweep and Infest are gated by unit_can_use_tech
+			// like the rest; Nuclear Strike is special-cased below (no energy, needs a missile).
+			{U::Terran_Comsat_Station, T::Scanner_Sweep, O::CastScannerSweep, false, "Scanner Sweep", 's'},
+			{U::Zerg_Queen, T::Infestation, O::CastInfestation, true, "Infest CC", 'i'},
+			{U::Terran_Ghost, T::None, O::CastNuclearStrike, false, "Nuclear Strike", 'n'},   // None = the nuke special-case
 		};
 		n = sizeof(s) / sizeof(s[0]);
 		return s;
@@ -777,14 +786,34 @@ struct play_ui : ui_functions {
 		size_t nsp; const spell_t* sp = spells(nsp);
 		for (size_t i = 0; i != nsp; ++i) {
 			if (sp[i].caster != id) continue;
-			const tech_type_t* te = get_tech_type(sp[i].tech);
-			if (!unit_can_use_tech(u, te, my_player)) continue;
+			bool have_energy;
+			if (sp[i].tech == TechTypes::None) {
+				// Nuclear Strike isn't a real tech: any Ghost can call in a built missile.
+				if (!player_has_completed_unit(my_player, U::Terran_Nuclear_Missile)) continue;
+				have_energy = true;
+			} else {
+				const tech_type_t* te = get_tech_type(sp[i].tech);
+				if (!unit_can_use_tech(u, te, my_player)) continue;
+				have_energy = u->energy.integer_part() >= te->energy_cost;
+			}
 			char k = sp[i].key;
 			for (auto& c : card) if (c.key == k) { k = 0; break; }
-			bool have_energy = u->energy.integer_part() >= te->energy_cost;
 			card.push_back({k ? k : pick_key(sp[i].label), sp[i].label, C_SPELL,
 			                U::None, have_energy, sp[i].tech});
 		}
+		// Cancel whatever this unit is mid-way through: a nuke it's painting, an addon it's
+		// building, or a Zerg morph. (A production queue is cancelled via its status chips.)
+		int cancel_op = 0;
+		if (unit_is_ghost(u) && u->connected_unit && unit_is(u->connected_unit, U::Terran_Nuclear_Missile))
+			cancel_op = 46;
+		else if (u_grounded_building(u) && u->secondary_order_type->id == Orders::BuildAddon &&
+		         u->current_build_unit && !u_completed(u->current_build_unit))
+			cancel_op = 52;
+		else if (unit_race(u) == race_t::zerg && !u->build_queue.empty())
+			cancel_op = 25;
+		if (cancel_op)
+			card.push_back({pick_key("Cancel"), "Cancel", C_CANCEL, U::None, true,
+			                TechTypes::None, UpgradeTypes::None, (uint16_t)cancel_op});
 		// Cargo: a bunker/transport shows each carried unit (click its icon to eject just
 		// that one) plus an Unload button that ejects everything.
 		if (unit_provides_space(u)) {
@@ -930,8 +959,8 @@ struct play_ui : ui_functions {
 
 	// ---- blocked-command feedback ------------------------------------------------
 	// A blocked command's reason, tied to its advisor error voice (*AdErr00/01/02).
-	enum err_kind { E_NONE = 0, E_MINERALS, E_GAS, E_SUPPLY };
-	int err_sound_cache[4] = { -1, -2, -2, -2 };   // per kind, lazy (-2 = unresolved)
+	enum err_kind { E_NONE = 0, E_MINERALS, E_GAS, E_SUPPLY, E_ENERGY };
+	int err_sound_cache[5] = { -1, -2, -2, -2, -1 };   // per kind, lazy (-2 = unresolved)
 
 	const char* supply_error_msg() const {
 		int r = (int)my_race;   // 1 = Terran, 2 = Protoss, else Zerg
@@ -942,6 +971,7 @@ struct play_ui : ui_functions {
 	const char* err_message(err_kind k) const {
 		return k == E_MINERALS ? "Not enough minerals"
 		     : k == E_GAS      ? "Not enough vespene gas"
+		     : k == E_ENERGY   ? "Not enough energy"
 		     : k == E_SUPPLY   ? supply_error_msg() : "";
 	}
 	// The race's advisor error line by filename (Terran's are lowercase tAdErr, so the
@@ -1110,7 +1140,11 @@ struct play_ui : ui_functions {
 	bool run_command(char key) {
 		for (auto& c : card) {
 			if (c.key != key) continue;
-			if (!c.enabled) return true;   // grayed out — consume the key, do nothing
+			if (!c.enabled) {
+				// Grayed spells are only ever blocked on energy — say so, don't fail silent.
+				if (c.act == C_SPELL) raise_error(E_ENERGY);
+				return true;
+			}
 			// Only the commands that actually spend are gated here. Build is excluded
 			// because its cost is taken on the placement click, and Land carries a unit
 			// type (the building's own) but costs nothing.
@@ -1158,6 +1192,11 @@ struct play_ui : ui_functions {
 			                      pending_spell_order = s->order; pending_spell_unit = s->targ_unit;
 			                      start_target(T_SPELL);
 			                  } break;
+			case C_CANCEL:    sync_selection();
+			                  if (c.unit == 46) cmds.cancel_nuke();
+			                  else if (c.unit == 52) cmds.cancel_addon();
+			                  else cmds.cancel_morph();
+			                  break;
 			}
 			return true;
 		}
