@@ -428,6 +428,25 @@ async function boot(session) {
     try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
     x.openbw_set_order_lines(optLines.checked ? 1 : 0);
   };
+  // Save the game as a StarCraft .rep. Our command stream already is BW's action format,
+  // so the wasm just serialises what it recorded — the file opens in BW and in replay tools.
+  const replayBtn = $('opt-replay');
+  replayBtn.onclick = () => {
+    const ptr = x.openbw_save_replay();
+    const len = x.openbw_replay_len();
+    if (!ptr || !len) { replayBtn.textContent = 'Nothing recorded yet'; return; }
+    // Copy out of wasm memory before creating the Blob — the buffer is reused.
+    const bytes = new Uint8Array(memory.buffer, ptr, len).slice();
+    const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
+    const a = document.createElement('a');
+    const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+    a.href = url; a.download = `openbw-${stamp}.rep`;
+    a.click();
+    URL.revokeObjectURL(url);
+    replayBtn.textContent = `Saved (${(len / 1024) | 0} KB)`;
+    setTimeout(() => { replayBtn.textContent = 'Save replay (.rep)'; }, 2500);
+  };
+
   // Resign: one confirming click (no blocking dialog), then concede via the sim.
   const resignBtn = $('opt-resign');
   let resignArmed = false;

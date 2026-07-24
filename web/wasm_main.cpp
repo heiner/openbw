@@ -90,14 +90,55 @@ static void init_game(int width, int height, int my_slot, const mp_slot* slots, 
 	};
 	g_ui->init();
 
+	uint32_t rep_seed0 = 0;   // filled in at the map's setup point (see setup_melee_slots)
 	data_loading::mpq_file<data_loading::js_file_reader<>> map_loader("openbw.map");
-	setup_melee_slots(g_ui->player.st(), map_loader, slots, n);
+	// Tee the map's CHK out of the loader: a .rep embeds it verbatim, and it's the only
+	// part of the replay we can't reconstruct from the sim afterwards.
+	setup_melee_slots(g_ui->player.st(), [&](a_vector<uint8_t>& out, a_string fn) {
+		map_loader(out, fn);
+		a_string low;
+		for (char c : fn) low += (char)std::tolower((unsigned char)c);
+		if (low.find("scenario.chk") != a_string::npos) g_ui->rep_map = out;
+	}, slots, n, &rep_seed0);
 
 	g_ui->wnd.create("OpenBW Web", 0, 0, width, height);
 	g_ui->resize(width, height);
 	g_ui->set_image_data();
 	xy start = g_ui->game_st.start_locations[my_slot];
 	g_ui->screen_pos = start - xy(width / 2, height / 2);
+
+	// Seed the replay header from the loaded game. Everything here is fixed at start, so
+	// the recording only has to accumulate actions from now on.
+	{
+		state& st = g_ui->player.st();
+		replay_saver_state& r = g_ui->rep;
+		r.map_data = g_ui->rep_map.data();
+		r.map_data_size = g_ui->rep_map.size();
+		r.map_tile_width = g_ui->game_st.map_tile_width;
+		r.map_tile_height = g_ui->game_st.map_tile_height;
+		r.tileset = (int)g_ui->game_st.tileset_index;
+		r.active_player_count = (int)n;
+		r.slot_count = (int)n;
+		r.game_speed = 6;                 // "fastest", matching our default step rate
+		r.game_type = 2;                  // melee
+		r.random_seed = rep_seed0;
+		r.game_name = "OpenBW Web";
+		r.map_name = g_ui->game_st.scenario_name;
+		r.player_name = "Player";
+		// Must mirror setup_melee_slots, or a replayer rebuilds a different game.
+		r.setup_info.victory_condition = 1;
+		r.setup_info.tournament_mode = 0;
+		r.setup_info.starting_units = 0;
+		r.setup_info.resource_type = 1;
+		r.setup_info.starting_minerals = 50;
+		for (size_t i = 0; i != 12; ++i) {
+			r.players[i] = st.players[i];
+			r.setup_info.create_melee_units_for_player[i] = st.players[i].controller == player_t::controller_occupied;
+		}
+		for (size_t k = 0; k != n; ++k)
+			r.player_names[slots[k].slot] = (int)k == my_slot ? "You" : "Opponent";
+		g_ui->rep_on = g_ui->rep_map.size() != 0;
+	}
 
 	ui::log("openbw_init: map '%s' %dx%d, slot %d of %d, units=%d, fog_player=%d\n",
 		g_ui->game_st.scenario_name, (int)g_ui->game_st.map_width,
@@ -245,6 +286,22 @@ OPENBW_EXPORT(openbw_start_locations) int openbw_start_locations() {
 	for (size_t i = 0; i != 8; ++i) if (g_ui->game_st.start_locations[i] != xy()) ++n;
 	return n;
 }
+
+// Serialise the recorded game as a BW .rep and hand back the bytes. Returns 0 if nothing
+// was recorded. The result stays valid until the next call.
+OPENBW_EXPORT(openbw_save_replay) const uint8_t* openbw_save_replay() {
+	if (!g_ui || !g_ui->rep_on) return nullptr;
+	g_ui->rep_out.clear();
+	// vector_writer only writes into already-reserved capacity (its left() is
+	// capacity - size) and throws otherwise, so size the buffer up front.
+	size_t hist = 0;
+	for (auto& v : g_ui->rep.history) hist += v.size();
+	g_ui->rep_out.reserve(g_ui->rep.map_data_size + hist + (size_t)(1 << 20));
+	auto w = data_loading::make_vector_writer(g_ui->rep_out);
+	replay_saver_functions(g_ui->rep).save_replay(g_ui->player.st().current_frame, w);
+	return g_ui->rep_out.data();
+}
+OPENBW_EXPORT(openbw_replay_len) int openbw_replay_len() { return g_ui ? (int)g_ui->rep_out.size() : 0; }
 
 // Resign: concede the game. Routed through the command stream so a 1v1 stays in lockstep.
 OPENBW_EXPORT(openbw_resign) void openbw_resign() { if (g_ui) g_ui->resign(); }

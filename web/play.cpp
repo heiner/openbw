@@ -17,6 +17,7 @@
 //   OPENBW_FOGTEST=<n>        assert fog of war is per-player in a 2-player melee
 
 #include "sandbox.h"
+#include "replay.h"
 
 #include <chrono>
 #include <thread>
@@ -213,6 +214,102 @@ int run_wintest(const char* data_dir, const char* map_file, int wipe, int frames
 // action_* calls (the path the UI used before). Identical checksums prove the
 // serialisation round-trips exactly — a wrong payload layout diverges immediately —
 // and that stepping both from the same stream stays deterministic.
+// Record a game to a BW .rep, then load it back with OpenBW's own replay reader and
+// re-simulate it — the strongest check that the file is both valid and faithful, since a
+// replay that reaches the identical checksum reproduced the game exactly.
+int run_reptest(const char* data_dir, const char* map_file, race_t my_race, int frames) {
+	const int me = 0;
+	auto load = data_loading::data_files_directory(data_dir);
+	game_player p(load);
+	replay_saver_state rep;
+	a_vector<uint8_t> chk;
+	uint32_t seed0 = 0;   // captured at the map setup point
+	mp_slot slots[2] = {{0, my_race}, {1, my_race}};
+	{
+		data_loading::mpq_file<> m(map_file);
+		setup_melee_slots(p.st(), [&](a_vector<uint8_t>& out, a_string fn) {
+			m(out, fn);
+			a_string low; for (char c : fn) low += (char)std::tolower((unsigned char)c);
+			if (low.find("scenario.chk") != a_string::npos) chk = out;
+		}, slots, 2, &seed0);
+	}
+	state& st = p.st();
+	action_state as; action_functions af(st, as);
+	build_kit kit = kit_for(my_race);
+
+	rep.map_data = chk.data(); rep.map_data_size = chk.size();
+	rep.map_tile_width = st.game->map_tile_width;
+	rep.map_tile_height = st.game->map_tile_height;
+	rep.tileset = (int)st.game->tileset_index;
+	rep.active_player_count = 2; rep.slot_count = 2;
+	rep.game_speed = 6; rep.game_type = 2;
+	rep.random_seed = seed0;
+	rep.game_name = "OpenBW Web"; rep.map_name = st.game->scenario_name;
+	rep.player_name = "Player";
+	rep.setup_info.victory_condition = 1;
+	rep.setup_info.tournament_mode = 0;
+	rep.setup_info.starting_units = 0;
+	rep.setup_info.resource_type = 1;
+	rep.setup_info.starting_minerals = 50;
+	for (size_t i = 0; i != 12; ++i) {
+		rep.players[i] = st.players[i];
+		rep.setup_info.create_melee_units_for_player[i] = st.players[i].controller == player_t::controller_occupied;
+	}
+	rep.player_names[0] = "You"; rep.player_names[1] = "Opponent";
+
+	const unsigned sum_setup = sim_checksum(st);   // state at frame 0, before any actions
+
+	// Issue a few real orders through the command path, recording each as we apply it.
+	a_vector<uint8_t> out; bw_cmd w(out);
+	auto flush = [&]() {
+		apply_bw_commands(af, me, out.data(), out.size(),
+			[&](int o, const uint8_t* d, size_t n) { replay_saver_functions(rep).add_action(st.current_frame, o, d, n); });
+		out.clear();
+	};
+	unit_t* wk = find_unit_of_type(st, me, kit.worker);
+	if (wk) { uint16_t id = af.get_unit_id(wk).raw_value; w.select(&id, 1);
+	          w.default_order(wk->sprite->position + xy(96, 96), 0, false); flush(); }
+	for (int i = 0; i != frames / 2; ++i) af.next_frame();
+	if (wk) { uint16_t id = af.get_unit_id(wk).raw_value; w.select(&id, 1);
+	          w.default_order(wk->sprite->position - xy(64, 32), 0, false); flush(); }
+	for (int i = st.current_frame; i < frames; ++i) af.next_frame();
+
+	const int end_frame = st.current_frame;
+	const unsigned live_sum = sim_checksum(st);
+	const int live_units = count_units(st, me);
+
+	a_vector<uint8_t> repbytes;
+	{
+		size_t hist = 0; for (auto& v : rep.history) hist += v.size();
+		repbytes.reserve(rep.map_data_size + hist + (size_t)(1 << 20));
+		auto vw = data_loading::make_vector_writer(repbytes);
+		replay_saver_functions(rep).save_replay(end_frame, vw);
+	}
+	ui::log("reptest: recorded %d frames -> %d byte .rep\n", end_frame, (int)repbytes.size());
+	const char* path = "/tmp/openbw_reptest.rep";
+	{ FILE* f = fopen(path, "wb"); if (!f) { ui::log("reptest: cannot write %s\n", path); return 1; }
+	  fwrite(repbytes.data(), 1, repbytes.size(), f); fclose(f); }
+
+	// Load it back and re-simulate.
+	game_player p2(load);
+	replay_state rs; action_state as2;
+	replay_functions rf(p2.st(), as2, rs);
+	rf.load_replay_file(path);
+	const unsigned rep_setup = sim_checksum(p2.st());
+	ui::log("reptest: setup live=%08x rep=%08x  %s\n", sum_setup, rep_setup,
+	        sum_setup == rep_setup ? "match" : "MISMATCH (setup differs)");
+	while (!rf.is_done()) rf.next_frame();
+	const unsigned rep_sum = sim_checksum(p2.st());
+	const int rep_units = count_units(p2.st(), me);
+
+	bool ok = rep_sum == live_sum && rep_units == live_units && p2.st().current_frame == end_frame;
+	ui::log("reptest: live  frame=%d checksum=%08x units=%d\n", end_frame, live_sum, live_units);
+	ui::log("reptest: rep   frame=%d checksum=%08x units=%d\n",
+	        (int)p2.st().current_frame, rep_sum, rep_units);
+	ui::log("reptest: %s\n", ok ? "OK" : "FAILED");
+	return ok ? 0 : 1;
+}
+
 int run_nettest(const char* data_dir, const char* map_file, int my_player, race_t my_race, int frames) {
 	auto load = data_loading::data_files_directory(data_dir);
 	game_player pa(load), pb(load);
@@ -479,6 +576,7 @@ int main(int argc, char** argv) {
 
 	const char* wintest = getenv("OPENBW_WINTEST");
 	if (wintest) return run_wintest(data_dir, map_file, my_player, atoi(wintest));
+	if (const char* rt = getenv("OPENBW_REPTEST")) return run_reptest(data_dir, map_file, my_race, atoi(rt));
 
 	const char* fogtest = getenv("OPENBW_FOGTEST");
 	if (fogtest) return run_fogtest(data_dir, map_file, atoi(fogtest));

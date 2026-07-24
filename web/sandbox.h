@@ -10,6 +10,7 @@
 
 #include "ui.h"
 #include "bwgame.h"
+#include "replay_saver.h"
 
 #include <cstring>
 
@@ -31,9 +32,13 @@ struct mp_slot { int slot; race_t race; };
 // multiplayer occupies every participating slot so all peers build a byte-identical
 // initial state (which is what lockstep depends on).
 template<typename load_data_file_F>
-void setup_melee_slots(state& st, load_data_file_F&& load_data_file, const mp_slot* slots, size_t n) {
+void setup_melee_slots(state& st, load_data_file_F&& load_data_file, const mp_slot* slots, size_t n,
+                       uint32_t* seed_at_setup = nullptr) {
 	game_load_functions game_load(st);
 	game_load.load_map(std::forward<load_data_file_F>(load_data_file), [&]() {
+		// The RNG seed as of this exact point is what a replay must record: the replay
+		// reader restores it here too, before melee units are placed (which advances it).
+		if (seed_at_setup) *seed_at_setup = st.lcg_rand_state;
 		// Melee, NOT "use map settings". The engine derives use_map_settings from these
 		// three being zero (bwgame.h), so leaving victory_condition at 0 silently ran the
 		// map's own trigger set — which on a melee map shares vision between players and
@@ -182,17 +187,26 @@ struct bw_cmd {
 	void player_leave(int reason) { begin(87); u8(reason); end(); }  // 87 leave (resign)
 };
 
-// Apply one player's framed batch, in order, through the engine's action reader.
-template<typename action_functions_T>
-void apply_bw_commands(action_functions_T& af, int owner, const uint8_t* data, size_t size) {
+// Apply one player's framed batch, in order, through the engine's action reader. `rec`
+// sees each decoded record first — used to tee the stream into a replay. The bytes are
+// already exactly BW's action format, so a recorded stream is a valid .rep body.
+template<typename action_functions_T, typename record_F>
+void apply_bw_commands(action_functions_T& af, int owner, const uint8_t* data, size_t size, record_F&& rec) {
 	size_t i = 0;
 	while (i + 2 <= size) {
 		size_t n = (size_t)data[i] | ((size_t)data[i + 1] << 8);
 		i += 2;
 		if (n == 0 || i + n > size) break;
+		rec(owner, data + i, n);
 		af.read_action(owner, data + i, n);
 		i += n;
 	}
+}
+
+// Convenience overload with no recorder.
+template<typename action_functions_T>
+void apply_bw_commands(action_functions_T& af, int owner, const uint8_t* data, size_t size) {
+	apply_bw_commands(af, owner, data, size, [](int, const uint8_t*, size_t) {});
 }
 
 template<typename action_functions_T>
@@ -291,6 +305,16 @@ struct play_ui : ui_functions {
 	int outcome = 0;                              // 0 undecided, 1 victory, 2 defeat
 	bool competitive = false;                     // true only with an opponent (multiplayer)
 
+	// Replay recording. Our command stream already *is* BW's action format, so recording
+	// is just teeing it into replay_saver_state along with the map's CHK bytes.
+	replay_saver_state rep;
+	a_vector<uint8_t> rep_map;                    // CHK bytes backing rep.map_data
+	a_vector<uint8_t> rep_out;                    // the serialised .rep, built on demand
+	bool rep_on = false;
+	void rep_record(int owner, const uint8_t* data, size_t n) {
+		if (rep_on) replay_saver_functions(rep).add_action(st.current_frame, owner, data, n);
+	}
+
 	play_ui(game_player player, int my_player, race_t my_race)
 		: ui_functions(std::move(player)), my_player(my_player), my_race(my_race),
 		  kit(kit_for(my_race)) {
@@ -367,7 +391,10 @@ struct play_ui : ui_functions {
 	void cmd_id8(int opcode, int v) { cmds.id8(opcode, v); }
 	void cmd_cancel_slot(int slot) { cmds.cancel_slot(slot); }
 	void apply_commands(int owner, const uint8_t* data, size_t size) {
-		apply_bw_commands(*this, owner, data, size);
+		// Every applied action is also recorded, so the replay matches the game exactly —
+		// including in multiplayer, where the peer's actions come through here too.
+		apply_bw_commands(*this, owner, data, size,
+			[this](int o, const uint8_t* d, size_t n) { rep_record(o, d, n); });
 	}
 
 	// Push the UI's visual selection into the sim's per-player selection, capped to BW's
