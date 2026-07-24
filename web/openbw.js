@@ -133,7 +133,7 @@ async function loadAssets(mapFile = MAP_LOCAL) {
         setMsg(`Loading ${key} from local mirror…`);
         buf = mirror;
       } else {
-        setMsg(`Downloading ${key} (${(size / 1e6) | 0} MB) from the Internet Archive…`);
+        setMsg(`Downloading ${key} (${(size / 1e6) | 0} MB)…`);
         buf = await fetchWithProgress(url, size, setBar);
       }
       setMsg(`Caching ${key}…`);
