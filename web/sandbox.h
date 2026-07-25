@@ -1419,27 +1419,36 @@ struct play_ui : ui_functions {
 
 	// A clipped ellipse outline (midpoint) in screen space — the target ring. Rendering
 	// only, so ordinary float math is fine (not part of the deterministic sim).
-	void draw_ellipse(uint8_t* data, size_t pitch, int cx, int cy, int rx, int ry, uint8_t color) {
-		auto plot4 = [&](int x, int y) {
-			for (int sx = -1; sx <= 1; sx += 2) for (int sy = -1; sy <= 1; sy += 2) {
-				int px = cx + sx * x, py = cy + sy * y;
-				if ((unsigned)px < screen_width && (unsigned)py < screen_height)
-					data[(size_t)py * pitch + px] = color;
-			}
+	// Draw a unit's actual selection circle sprite in a specific colour. Mirrors
+	// ui_functions::draw_selection_circle exactly (same GRP, position, clipping) — it just
+	// remaps the ring's colour band to `color` instead of the owner's player colour.
+	void draw_selection_ring(const unit_t* u, uint8_t color, uint8_t* data, size_t data_pitch) {
+		const sprite_t* sprite = u->sprite;
+		auto* image_type = get_image_type((ImageTypes)((int)ImageTypes::IMAGEID_Selection_Circle_22pixels + sprite->sprite_type->selection_circle));
+		xy map_pos = sprite->position + xy(0, sprite->sprite_type->selection_circle_vpos);
+		auto* grp = global_st.image_grp[(size_t)image_type->id];
+		auto& frame = grp->frames.at(0);
+		map_pos.x += int(frame.offset.x - grp->width / 2);
+		map_pos.y += int(frame.offset.y - grp->height / 2);
+		int screen_x = map_pos.x - screen_pos.x;
+		int screen_y = map_pos.y - screen_pos.y;
+		if (screen_x >= (int)screen_width || screen_y >= (int)screen_height) return;
+		size_t width = frame.size.x, height = frame.size.y;
+		if (screen_x + (int)width <= 0 || screen_y + (int)height <= 0) return;
+		size_t offset_x = 0, offset_y = 0;
+		if (screen_x < 0) offset_x = -screen_x;
+		if (screen_y < 0) offset_y = -screen_y;
+		uint8_t* dst = data + screen_y * data_pitch + screen_x;
+		width = std::min(width, screen_width - screen_x);
+		height = std::min(height, screen_height - screen_y);
+		auto remap = [color](uint8_t new_value, uint8_t) {
+			return new_value < 8 ? color : new_value;
 		};
-		float rx2 = (float)rx * rx, ry2 = (float)ry * ry;
-		int x = 0, y = ry;
-		float px = 0, py = 2 * rx2 * y;
-		float p = ry2 - rx2 * ry + 0.25f * rx2;
-		while (px < py) { plot4(x, y); ++x; px += 2 * ry2;
-			if (p < 0) p += ry2 + px; else { --y; py -= 2 * rx2; p += ry2 + px - py; } }
-		p = ry2 * (x + 0.5f) * (x + 0.5f) + rx2 * (float)(y - 1) * (y - 1) - rx2 * ry2;
-		while (y >= 0) { plot4(x, y); --y; py -= 2 * rx2;
-			if (p > 0) p += rx2 - py; else { ++x; px += 2 * ry2; p += rx2 - py + px; } }
+		draw_frame(frame, false, dst, data_pitch, offset_x, offset_y, width, height, remap);
 	}
 
-	// Draw the blinking target ring: green own, yellow neutral, red enemy; on for half of
-	// each ~6-frame phase, so over 24 frames it blinks about twice.
+	// The blinking target ring: the unit's own selection circle, coloured by allegiance —
+	// green for your own, yellow neutral, red enemy. ~1s per phase (show / hide / show).
 	void draw_target_flash(uint8_t* data, size_t pitch) {
 		if (flash_frames <= 0) return;
 		--flash_frames;
@@ -1453,10 +1462,7 @@ struct play_ui : ui_functions {
 		if (ring_neutral_color < 0) ring_neutral_color = nearest_palette_color(240, 220, 40);
 		int color = t->owner == my_player ? line_move_color
 		          : t->owner < 8 ? line_atk_color : ring_neutral_color;
-		int cx = t->sprite->position.x - screen_pos.x;
-		int cy = t->sprite->position.y - screen_pos.y;
-		int rx = t->unit_type->placement_size.x / 2 + 3; if (rx < 6) rx = 6;
-		draw_ellipse(data, pitch, cx, cy, rx, rx * 3 / 5, (uint8_t)color);
+		draw_selection_ring(t, (uint8_t)color, data, pitch);
 	}
 
 	// A clipped Bresenham line in screen space (map coords minus the camera).
