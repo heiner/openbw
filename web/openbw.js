@@ -950,8 +950,18 @@ const resolveRace = (r) => (r === -1 ? [0, 1, 2][(Math.random() * 3) | 0] : r);
 const mpSay = (t, cls = '') => { mp.status.textContent = t; mp.status.className = cls; };
 const mpShow = (el, on) => { el.style.display = on ? 'block' : 'none'; };
 
-for (const m of MAPS) mapSelect.add(new Option(m.name, m.file));
+// Only list maps the site actually serves. Production ships just the one CC-licensed
+// map; a local checkout has the others too. Probing keeps the dropdown honest in both
+// (and picks up any licensed map added later) instead of advertising a 404. MAPS[0] is
+// the always-shipped default, so it's listed immediately and the rest fill in as their
+// HEAD requests confirm — the UI is never empty and never offers a map that isn't there.
+mapSelect.add(new Option(MAPS[0].name, MAPS[0].file));
 for (const sel of mp.r) fillRaces(sel);
+Promise.all(MAPS.slice(1).map(async (m) => {
+  try { return (await fetch(m.file, { method: 'HEAD' })).ok ? m : null; } catch { return null; }
+})).then((found) => {
+  for (const m of found) if (m) mapSelect.add(new Option(m.name, m.file));
+});
 
 // Race is picked in the lobby, not before hosting — the handshake only carries the
 // starting value, and either side can change it until the countdown locks.
