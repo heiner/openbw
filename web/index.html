@@ -11,7 +11,11 @@
   #wrap { position: fixed; inset: 0; }
   /* touch-action:none — we handle touch gestures ourselves; stop the browser from
      scrolling/zooming/double-tap-zooming on the game surface. */
-  #screen { image-rendering: pixelated; display: block; width: 100vw; height: 100vh; touch-action: none;
+  /* 100dvh/dvw (with vh/vw fallback) = the *visible* viewport. Plain 100vh is the large
+     viewport that extends under the mobile browser's toolbar / home indicator, which pushed
+     the framebuffer's bottom edge — where the minimap sits — off-screen. */
+  #screen { image-rendering: pixelated; display: block; touch-action: none;
+    width: 100vw; height: 100vh; width: 100dvw; height: 100dvh;
     background: #111; cursor: default; }
   /* Anchored to the top, not vertically centred: the panel gains rows as you host or
      join, and centring made every existing row jump upward each time. Growing downwards
