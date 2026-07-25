@@ -98,6 +98,13 @@
     cursor: pointer; }
   #topbar button:hover { background: rgba(0,0,0,.72); }
   #pausebtn, #mute { width: 34px; }
+  /* Pause/play as CSS shapes, not emoji — mobile renders ⏸/▶ as colour emoji even with
+     the text-variation selector. currentColor keeps them the button's grey. */
+  #pausebtn::before { content: ''; display: inline-block; vertical-align: middle; box-sizing: content-box; }
+  #pausebtn:not(.is-paused)::before { width: 4px; height: 13px;
+    border-left: 4px solid currentColor; border-right: 4px solid currentColor; }
+  #pausebtn.is-paused::before { width: 0; height: 0; margin-left: 3px;
+    border-top: 7px solid transparent; border-bottom: 7px solid transparent; border-left: 12px solid currentColor; }
   #settingsbtn, #helpbtn { width: 30px; }
   #helpbtn { font: 700 16px system-ui, sans-serif; }
   #settings { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 320px;
@@ -204,7 +211,7 @@
 <div id="wrap"><canvas id="screen" width="1280" height="800"></canvas></div>
 <div id="resources"></div>
 <div id="topbar">
-  <button id="pausebtn" title="Pause">⏸</button>
+  <button id="pausebtn" title="Pause"></button>
   <button id="mute" title="Mute sound">🔊</button>
   <button id="settingsbtn" title="Settings">⚙️</button>
   <button id="helpbtn" title="Controls">?</button>

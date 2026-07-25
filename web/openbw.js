@@ -762,7 +762,7 @@ async function boot(session) {
     updateBanner();
   };
   const applyPause = () => {
-    pauseBtn.textContent = paused ? '▶︎' : '⏸︎';
+    pauseBtn.classList.toggle('is-paused', paused);
     pauseBtn.title = paused ? 'Resume' : 'Pause';
     updateBanner();
   };
