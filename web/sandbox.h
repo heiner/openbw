@@ -964,6 +964,23 @@ struct play_ui : ui_functions {
 		return resources_text.c_str();
 	}
 
+	// End-game score for the game-over screen. First line "outcome\tframe"; then one line
+	// per player that started the game: "isMe\trace\tcolor\tunits\tbuildings\tminerals\tgas
+	// \tscore". Stats come straight from the sim's cumulative counters.
+	a_string stats_out;
+	const char* stats_text() {
+		stats_out = format("%d\t%d", outcome, (int)st.current_frame);
+		for (int i = 0; i != 8; ++i) {
+			if (!st.players[i].initially_active) continue;
+			stats_out += format("\n%d\t%d\t%d\t%d\t%d\t%d\t%d\t%d",
+				i == my_player ? 1 : 0, (int)st.players[i].race, st.players[i].color,
+				st.total_non_buildings_ever_completed[i], st.total_buildings_ever_completed[i],
+				st.total_minerals_gathered[i], st.total_gas_gathered[i],
+				st.unit_score[i] + st.building_score[i]);
+		}
+		return stats_out.c_str();
+	}
+
 	// ---- blocked-command feedback ------------------------------------------------
 	// A blocked command's reason, tied to its advisor error voice (*AdErr00/01/02).
 	enum err_kind { E_NONE = 0, E_MINERALS, E_GAS, E_SUPPLY, E_ENERGY };

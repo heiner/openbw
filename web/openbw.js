@@ -508,24 +508,60 @@ async function boot(session) {
     try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
     x.openbw_set_order_lines(optLines.checked ? 1 : 0);
   };
-  // Save the game as a StarCraft .rep. Our command stream already is BW's action format,
-  // so the wasm just serialises what it recorded — the file opens in BW and in replay tools.
-  const replayBtn = $('opt-replay');
-  replayBtn.onclick = () => {
-    const ptr = x.openbw_save_replay();
-    const len = x.openbw_replay_len();
-    if (!ptr || !len) { replayBtn.textContent = 'Nothing recorded yet'; return; }
-    // Copy out of wasm memory before creating the Blob — the buffer is reused.
-    const bytes = new Uint8Array(memory.buffer, ptr, len).slice();
+  // Save the recorded game as a StarCraft .rep. Our command stream already is BW's action
+  // format, so the wasm just serialises what it recorded — opens in BW and replay tools.
+  const saveReplay = (btn) => {
+    const ptr = x.openbw_save_replay(), len = x.openbw_replay_len();
+    if (!ptr || !len) { if (btn) btn.textContent = 'Nothing recorded'; return; }
+    const bytes = new Uint8Array(memory.buffer, ptr, len).slice();   // copy: the buffer is reused
     const url = URL.createObjectURL(new Blob([bytes], { type: 'application/octet-stream' }));
     const a = document.createElement('a');
     const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
-    a.href = url; a.download = `openbw-${stamp}.rep`;
-    a.click();
+    a.href = url; a.download = `openbw-${stamp}.rep`; a.click();
     URL.revokeObjectURL(url);
-    replayBtn.textContent = `Saved (${(len / 1024) | 0} KB)`;
-    setTimeout(() => { replayBtn.textContent = 'Save replay (.rep)'; }, 2500);
+    if (btn) { const t = btn.textContent; btn.textContent = `Saved (${(len / 1024) | 0} KB)`;
+               setTimeout(() => { btn.textContent = t; }, 2500); }
   };
+
+  // End-of-game score screen: outcome, per-player unit/building/resource/score totals from
+  // the sim, and the save-replay button (a replay is only worth keeping once it's done).
+  const RACE_NAME = ['Zerg', 'Terran', 'Protoss'];
+  const PLAYER_COLORS = ['#f40404', '#0c48cc', '#2cb494', '#88409c', '#f88c14', '#703014', '#cce0d0', '#fcfc38'];
+  let gameOverShown = false;
+  const showGameOver = (title, won) => {
+    if (gameOverShown) return;
+    gameOverShown = true;
+    // openbw_stats returns a C-string pointer, not a JS string — read it out of wasm memory.
+    const ptr = x.openbw_stats();
+    const rows = (ptr ? readCString(ptr) : '').split('\n');
+    const secs = Math.round((+(rows.shift() || '0\t0').split('\t')[1] || 0) / 24);   // ~24 fps
+    let html = '<tr><th>Player</th><th>Units</th><th>Buildings</th><th>Minerals</th><th>Gas</th><th>Score</th></tr>';
+    for (const line of rows) {
+      if (!line) continue;
+      const [isMe, race, color, units, bldgs, min, gas, score] = line.split('\t').map(Number);
+      const sw = `<span class="swatch" style="background:${PLAYER_COLORS[color] || '#888'}"></span>`;
+      html += `<tr class="${isMe ? 'me' : ''}"><td>${sw}${RACE_NAME[race] || 'Player'}</td>` +
+              `<td>${units}</td><td>${bldgs}</td><td>${min}</td><td>${gas}</td><td>${score}</td></tr>`;
+    }
+    html += `<tr><td colspan="6" style="color:#64748b;text-align:center;padding-top:12px">` +
+            `Game length ${(secs/60)|0}:${String(secs%60).padStart(2,'0')}</td></tr>`;
+    $('go-stats').innerHTML = html;
+    const t = $('go-title');
+    t.textContent = title;
+    t.className = won === true ? 'win' : won === false ? 'lose' : '';
+    $('gameover').classList.add('show');
+  };
+  $('go-replay').onclick = (e) => saveReplay(e.currentTarget);
+  $('go-close').onclick = () => { x.openbw_reveal_map(); $('gameover').classList.remove('show'); };
+  $('go-new').onclick = () => location.replace(location.origin + location.pathname);
+
+  // Debug (?debug in the URL): force a win/lose to exercise the game-over screen without
+  // playing to elimination. Bypasses the competitive gate, so it works in single-player.
+  if (/(\?|&)debug\b/.test(location.search)) {
+    $('opt-debug').style.display = 'block';
+    $('dbg-victory').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(1); };
+    $('dbg-defeat').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(2); };
+  }
 
   // Resign: one confirming click (no blocking dialog), then concede via the sim.
   const resignBtn = $('opt-resign');
@@ -590,7 +626,7 @@ async function boot(session) {
       lockstep.dropSlot(peerSlot);
       dropBtn.style.display = 'none';
       try { link.close(); } catch {}
-      setBanner(banner, 0);
+      showGameOver(banner, /Victory/.test(banner));   // opponent left is a win; others neutral
     };
     // The host is the authority: a peer sending turns for illegal frames, or whose sim has
     // diverged, is dropped rather than allowed to stall or corrupt the game.
@@ -668,7 +704,7 @@ async function boot(session) {
       // it's decided — rendering and panning keep working so you can look around.
       if (stepped && !over) {
         const o = x.openbw_outcome();
-        if (o) { over = true; overSince = now; setBanner(o === 1 ? 'Victory!' : 'Defeat', 0); }
+        if (o) { over = true; overSince = now; showGameOver(o === 1 ? 'Victory!' : 'Defeat', o === 1); }
       }
       // Hysteresis: only claim we're waiting after a sustained gap with no progress.
       // Reacting to a single late turn made the banner flicker. After a long stall, offer

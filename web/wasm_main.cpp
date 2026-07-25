@@ -306,6 +306,17 @@ OPENBW_EXPORT(openbw_replay_len) int openbw_replay_len() { return g_ui ? (int)g_
 // Resign: concede the game. Routed through the command stream so a 1v1 stays in lockstep.
 OPENBW_EXPORT(openbw_resign) void openbw_resign() { if (g_ui) g_ui->resign(); }
 
+// End-game score for the game-over screen (see play_ui::stats_text for the format).
+OPENBW_EXPORT(openbw_stats) const char* openbw_stats() { return g_ui ? g_ui->stats_text() : ""; }
+
+// Reveal the whole map (fog_player < 0 turns off fog rendering). Render-only, no sim
+// effect — used by the game-over "Look at map" so you can review the final board.
+OPENBW_EXPORT(openbw_reveal_map) void openbw_reveal_map() { if (g_ui) g_ui->fog_player = -1; }
+
+// Debug: force the outcome (1 victory, 2 defeat) to exercise the game-over screen without
+// playing to elimination. Bypasses the competitive gate, so it works in single-player too.
+OPENBW_EXPORT(openbw_debug_outcome) void openbw_debug_outcome(int v) { if (g_ui) g_ui->outcome = v; }
+
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
 
 // Desync probe (shared implementation in sandbox.h, so native and wasm can't disagree).

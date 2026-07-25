@@ -108,8 +108,7 @@
   #settings input { accent-color: #38bdf8; }
   #settings select { margin-left: auto; background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
     border-radius: 6px; padding: 2px 6px; font: inherit; cursor: pointer; }
-  #settings #opt-replay { width: 100%; margin-top: 12px; }
-  #settings .danger { width: 100%; margin-top: 8px; background: #7a1a1a; color: #fee2e2; }
+  #settings .danger { width: 100%; margin-top: 12px; background: #7a1a1a; color: #fee2e2; }
   #settings .danger:hover { background: #991b1b; }
   #help { position: fixed; top: 46px; left: 12px; z-index: 6; display: none; max-width: 400px;
     padding: 12px 16px; border-radius: 10px; background: rgba(15,23,42,.96); color: #cbd5e1;
@@ -165,6 +164,29 @@
     font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
     opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  /* End-of-game score screen. */
+  #gameover { position: fixed; inset: 0; z-index: 12; display: none; place-items: center;
+    background: rgba(3,6,12,.82); backdrop-filter: blur(2px); }
+  #gameover.show { display: grid; }
+  #gameover .go-card { min-width: 420px; max-width: 92vw; padding: 22px 26px; border-radius: 14px;
+    background: #0b1220; border: 1px solid #1e293b; box-shadow: 0 24px 64px rgba(0,0,0,.6);
+    text-align: center; }
+  #go-title { margin: 0 0 14px; font-size: 30px; letter-spacing: .5px; }
+  #go-title.win { color: #4ade80; } #go-title.lose { color: #f87171; }
+  #go-stats { width: 100%; border-collapse: collapse; font: 14px system-ui, sans-serif; }
+  #go-stats th { color: #94a3b8; font-weight: 600; text-align: right; padding: 6px 10px;
+    border-bottom: 1px solid #1e293b; }
+  #go-stats th:first-child { text-align: left; }
+  #go-stats td { text-align: right; padding: 7px 10px; color: #e2e8f0; }
+  #go-stats td:first-child { text-align: left; font-weight: 600; }
+  #go-stats tr.me td:first-child::after { content: ' (you)'; color: #64748b; font-weight: 400; }
+  #go-stats .swatch { display: inline-block; width: 10px; height: 10px; border-radius: 2px;
+    margin-right: 7px; vertical-align: middle; }
+  .go-actions { margin-top: 20px; display: flex; gap: 10px; justify-content: center; }
+  .go-actions button { font: inherit; padding: 9px 18px; }
+  .go-actions .go-ghost { background: #1e293b; color: #e2e8f0; }
+  .go-actions .go-ghost:hover { background: #334155; }
+  #opt-debug button { width: 100%; margin-top: 6px; background: #334155; color: #e2e8f0; }
   /* Finger-sized hit targets on touch devices. Scoped to a coarse pointer so mouse/
      trackpad layouts are untouched. */
   @media (pointer: coarse) {
@@ -201,7 +223,10 @@
       <option value="42">Fastest</option>
     </select>
   </label>
-  <button id="opt-replay">Save replay (.rep)</button>
+  <div id="opt-debug" style="display:none">
+    <button id="dbg-victory">Debug: force Victory</button>
+    <button id="dbg-defeat">Debug: force Defeat</button>
+  </div>
   <button id="opt-resign" class="danger">Resign game</button>
 </div>
 <div id="help">
@@ -217,6 +242,17 @@
 <div id="toast"></div>
 <div id="paused"><span>Paused</span></div>
 <button id="dropbtn">Drop opponent</button>
+<div id="gameover">
+  <div class="go-card">
+    <h1 id="go-title">Game over</h1>
+    <table id="go-stats"></table>
+    <div class="go-actions">
+      <button id="go-replay">Save replay (.rep)</button>
+      <button id="go-close" class="go-ghost">Look at map</button>
+      <button id="go-new" class="go-ghost">New game</button>
+    </div>
+  </div>
+</div>
 
 <div id="overlay"><div class="card">
   <h1><a id="home" href="./" title="Start over on a clean URL">OpenBW Web</a></h1>
