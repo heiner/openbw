@@ -742,10 +742,17 @@ struct play_ui : ui_functions {
 			add_producible(u, false);   // train/morph units, upgrades, research
 		}
 		// Terran buildings that fly: lift off when landed, land when airborne. A lifted
-		// building can't produce or rally, so it only ever offers Land.
+		// building can't produce or rally, so it only ever offers Land. Lift Off is grayed
+		// while the building is busy (training, researching, upgrading, building an addon)
+		// — mirrors action_liftoff, which would refuse it anyway.
 		if (ut_flying_building(u)) {
-			if (u_grounded_building(u)) card.push_back({pick_key("Lift"), "Lift Off", C_LIFT, U::None});
-			else card.push_back({pick_key("Land"), "Land", C_LAND, U::None});
+			if (u_grounded_building(u)) {
+				bool busy = unit_is_constructing(u) || unit_is_researching(u) || unit_is_upgrading(u)
+				         || !u->build_queue.empty()
+				         || (u->secondary_order_type && u->secondary_order_type->id == Orders::BuildAddon
+				             && u->current_build_unit && !u_completed(u->current_build_unit));
+				card.push_back({pick_key("Lift"), "Lift Off", C_LIFT, U::None, !busy});
+			} else card.push_back({pick_key("Land"), "Land", C_LAND, U::None});
 		}
 		if (building && u_grounded_building(u)) {
 			bool produces = false;
@@ -1390,7 +1397,8 @@ struct play_ui : ui_functions {
 
 	// Flash a target's ring when an order is aimed at it (attack / gather / follow), like
 	// the original's target-acquisition blink.
-	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = 80; } }
+	static const int FLASH_PHASE = 60, FLASH_TOTAL = 180;   // ~1s per phase: show / hide / show
+	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = FLASH_TOTAL; } }
 
 	// A clipped ellipse outline (midpoint) in screen space — the target ring. Rendering
 	// only, so ordinary float math is fine (not part of the deterministic sim).
@@ -1418,7 +1426,7 @@ struct play_ui : ui_functions {
 	void draw_target_flash(uint8_t* data, size_t pitch) {
 		if (flash_frames <= 0) return;
 		--flash_frames;
-		if ((flash_frames / 20) % 2 != 0) return;   // ~1/3s on, 1/3s off → two slow blinks
+		if (((FLASH_TOTAL - flash_frames) / FLASH_PHASE) % 2 != 0) return;   // middle phase hidden
 		unit_t* t = get_unit(flash_unit);
 		if (!t) { flash_frames = 0; return; }
 		if (line_move_color < 0) {
