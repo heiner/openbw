@@ -647,9 +647,14 @@ async function boot(session) {
   // not a bug; raising `delay` trades input lag for it. In real play both windows are
   // visible and this never applies — but two tabs in one window will crawl.
   const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000;
-  let stepTimer, stepClock = performance.now(), lastProgress = performance.now();
+  // After our own verdict we keep feeding the lockstep for a grace window, so a finished
+  // player doesn't starve the peer's turns before it reaches its own verdict. Without this
+  // the loser goes `over`, stops sending turns, and the winner stalls on "Waiting for
+  // opponent" a few frames short of detecting the win.
+  const OVER_GRACE_MS = 5000;
+  let stepTimer, stepClock = performance.now(), lastProgress = performance.now(), overSince = 0;
   const stepLoop = () => {
-    if (!paused && !over) {
+    if (!paused && (!over || (link && performance.now() - overSince < OVER_GRACE_MS))) {
       const now = performance.now();
       if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
       let budget = Math.min(Math.floor((now - stepClock) / stepMs), MAX_CATCHUP);
@@ -663,7 +668,7 @@ async function boot(session) {
       // it's decided — rendering and panning keep working so you can look around.
       if (stepped && !over) {
         const o = x.openbw_outcome();
-        if (o) { over = true; setBanner(o === 1 ? 'Victory!' : 'Defeat', 0); }
+        if (o) { over = true; overSince = now; setBanner(o === 1 ? 'Victory!' : 'Defeat', 0); }
       }
       // Hysteresis: only claim we're waiting after a sustained gap with no progress.
       // Reacting to a single late turn made the banner flicker. After a long stall, offer
@@ -674,7 +679,7 @@ async function boot(session) {
       updateBanner();
       // Desync probe: both peers hash the same frames and compare. Sampled after the step,
       // so both label it with the same post-step frame number.
-      if (stepped && link && !dropped && lockstep.frame % SUM_EVERY === 0) {
+      if (stepped && link && !dropped && !over && lockstep.frame % SUM_EVERY === 0) {
         const h = x.openbw_checksum() >>> 0;
         const peer = peerSums.get(lockstep.frame);
         if (peer === undefined) mySums.set(lockstep.frame, h);
@@ -683,7 +688,7 @@ async function boot(session) {
           if (peer !== h) {
             console.warn('[mp] desync', lockstep.frame, h, peer);
             if (session.isHost) link.sendControl({ t: 'kick', why: `desync at frame ${lockstep.frame}` });
-            over = true; dropped = 'desync'; setBanner('Desync detected — game ended', 0);
+            over = true; overSince = now; dropped = 'desync'; setBanner('Desync detected — game ended', 0);
           }
         }
         link.sendControl({ t: 'sum', f: lockstep.frame, h });
