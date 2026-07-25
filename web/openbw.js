@@ -58,9 +58,21 @@ async function fetchMap(file) {
 }
 // Peers must run byte-identical terrain or their sims diverge immediately, so the map is
 // hash-verified rather than trusted by filename.
+// A quick non-cryptographic hash (cyrb53) of the map bytes — enough to catch peers loading
+// different terrain, and pure JS so it works on any origin. crypto.subtle would need a
+// secure context (https or localhost), which broke multiplayer over a plain-http LAN IP.
+function cyrb53(bytes) {
+  let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
+  for (let i = 0; i < bytes.length; i++) {
+    h1 = Math.imul(h1 ^ bytes[i], 2654435761);
+    h2 = Math.imul(h2 ^ bytes[i], 1597334677);
+  }
+  h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
+  h2 = Math.imul(h2 ^ (h2 >>> 16), 2246822507) ^ Math.imul(h1 ^ (h1 >>> 13), 3266489909);
+  return (4294967296 * (2097151 & h2) + (h1 >>> 0)).toString(16).padStart(14, '0');
+}
 async function mapHash(file) {
-  const d = await crypto.subtle.digest('SHA-256', await fetchMap(file));
-  return [...new Uint8Array(d)].map((b) => b.toString(16).padStart(2, '0')).join('').slice(0, 32);
+  return cyrb53(await fetchMap(file));
 }
 
 const $ = (id) => document.getElementById(id);
@@ -261,15 +273,16 @@ function wireInput(canvas, x) {
     x.openbw_pan(Math.round(e.deltaX * scale), Math.round(e.deltaY * scale));
   }, { passive: false });
 
-  // --- Touch: one-finger gestures onto the mouse behaviours the engine already knows.
+  // --- Touch: gestures onto the mouse behaviours the engine already knows.
   //   short tap            → select                (left click)
   //   double tap           → select all of type    (double left click)
   //   drag                 → pan the camera
   //   long-press then drag → box select            (left-button drag)
   //   long-press then lift → smart order            (right click: move / attack / gather)
+  //   two-finger tap       → smart order            (right click — the trackpad's gesture)
   // The HTML command card keeps working, so tapping a verb (Attack…) then a target is the
-  // discoverable order path; the long-press right click is the power shortcut. Everything
-  // routes to existing exports — no engine changes.
+  // discoverable order path; two-finger tap (tablet) and long-press (one-handed phone) are
+  // the right-click shortcuts. Everything routes to existing exports — no engine changes.
   const LONG_MS = 350, DBL_MS = 300, MOVE_PX = 12, MOVE2 = MOVE_PX * MOVE_PX;
   const d2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
   let tt = null;                            // the active gesture, or null
@@ -280,16 +293,33 @@ function wireInput(canvas, x) {
 
   canvas.addEventListener('touchstart', (e) => {
     e.preventDefault();
-    if (tt) return;                         // already tracking a finger; ignore extras
     const t = e.changedTouches[0];
     const [px, py] = xy(t);
-    tt = { id: t.identifier, x0: px, y0: py, x: px, y: py, mode: 'pending', armed: false };
+    if (tt) {
+      // A second finger while the first is still a pending tap → two-finger tap = right
+      // click, mirroring the trackpad. Cancels the first finger's single-tap/long-press.
+      if (tt.mode === 'pending' && tt.id2 === undefined) {
+        clearTimeout(tt.timer);
+        tt.mode = 'two'; tt.id2 = t.identifier; tt.x02 = px; tt.y02 = py;
+      }
+      return;
+    }
+    tt = { id: t.identifier, x0: px, y0: py, x: px, y: py, mode: 'pending', armed: false, id2: undefined, up: 0 };
     tt.timer = setTimeout(() => { if (tt) tt.armed = true; }, LONG_MS);   // long-press fires
   }, { passive: false });
 
   canvas.addEventListener('touchmove', (e) => {
     if (!tt) return;
     e.preventDefault();
+    if (tt.mode === 'two' || tt.mode === 'dead') {
+      // Movement of either finger means it's a pan/pinch, not a tap — cancel the order.
+      for (const c of e.changedTouches) {
+        if (c.identifier !== tt.id && c.identifier !== tt.id2) continue;
+        const [cx, cy] = xy(c), first = c.identifier === tt.id;
+        if (d2(cx, cy, first ? tt.x0 : tt.x02, first ? tt.y0 : tt.y02) > MOVE2) tt.mode = 'dead';
+      }
+      return;
+    }
     const t = [...e.changedTouches].find((c) => c.identifier === tt.id);
     if (!t) return;
     const [px, py] = xy(t);
@@ -315,8 +345,19 @@ function wireInput(canvas, x) {
   const endTouch = (e) => {
     if (!tt) return;
     e.preventDefault();
-    const t = [...e.changedTouches].find((c) => c.identifier === tt.id);
-    if (!t) return;                         // a different finger lifted
+    const t = [...e.changedTouches].find((c) => c.identifier === tt.id || c.identifier === tt.id2);
+    if (!t) return;                         // a finger we aren't tracking
+    if (tt.mode === 'two' || tt.mode === 'dead') {
+      if (++tt.up < 2) return;              // wait until both fingers have lifted
+      if (tt.mode === 'two') {              // clean two-finger tap → smart order at the anchor
+        x.openbw_mouse_move(tt.x0, tt.y0);
+        x.openbw_mouse_button(1, 3, tt.x0, tt.y0, 1);
+        x.openbw_mouse_button(0, 3, tt.x0, tt.y0, 1);
+      }
+      tt = null; park();
+      return;
+    }
+    if (t.identifier !== tt.id) return;     // single-finger modes only track the primary
     clearTimeout(tt.timer);
     const [px, py] = xy(t);
     if (tt.mode === 'box') {
