@@ -9,7 +9,9 @@
   html, body { margin: 0; height: 100%; background: #000; color: #cbd5e1;
     font: 14px/1.5 system-ui, sans-serif; overflow: hidden; }
   #wrap { position: fixed; inset: 0; }
-  #screen { image-rendering: pixelated; display: block; width: 100vw; height: 100vh;
+  /* touch-action:none — we handle touch gestures ourselves; stop the browser from
+     scrolling/zooming/double-tap-zooming on the game surface. */
+  #screen { image-rendering: pixelated; display: block; width: 100vw; height: 100vh; touch-action: none;
     background: #111; cursor: default; }
   /* Anchored to the top, not vertically centred: the panel gains rows as you host or
      join, and centring made every existing row jump upward each time. Growing downwards
@@ -163,6 +165,17 @@
     font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
     opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  /* Finger-sized hit targets on touch devices. Scoped to a coarse pointer so mouse/
+     trackpad layouts are untouched. */
+  @media (pointer: coarse) {
+    #card .cmd { padding: 8px 10px; }
+    #card .cmd .ico { width: 28px; height: 28px; }
+    #status .q { padding: 8px 10px; }
+    #topbar button { height: 42px; }
+    #topbar #pausebtn, #topbar #mute { width: 46px; }
+    #topbar #settingsbtn, #topbar #helpbtn { width: 42px; }
+    #settings, #help { font-size: 15px; }
+  }
 </style>
 </head>
 <body>
@@ -210,8 +223,9 @@
   <div id="bar"><i></i></div>
   <div id="msg">Preparing…</div>
   <div id="mobilewarn">
-    ⚠️ Not supported on mobile yet — this is built for a mouse and keyboard, and it
-    downloads ~90&nbsp;MB of game data on first run. You can still try it below.
+    📱 Touch controls: <b>tap</b> to select, <b>drag</b> to pan, <b>long-press</b> to
+    command (move/attack), <b>long-press&nbsp;+&nbsp;drag</b> to box-select. Best in
+    landscape. First run downloads ~90&nbsp;MB of game data.
   </div>
   <div id="controls" style="display:none">
     <div class="row"><label>Map <select id="map-select"></select></label></div>

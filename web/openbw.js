@@ -260,6 +260,86 @@ function wireInput(canvas, x) {
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
     x.openbw_pan(Math.round(e.deltaX * scale), Math.round(e.deltaY * scale));
   }, { passive: false });
+
+  // --- Touch: one-finger gestures onto the mouse behaviours the engine already knows.
+  //   short tap            → select                (left click)
+  //   double tap           → select all of type    (double left click)
+  //   drag                 → pan the camera
+  //   long-press then drag → box select            (left-button drag)
+  //   long-press then lift → smart order            (right click: move / attack / gather)
+  // The HTML command card keeps working, so tapping a verb (Attack…) then a target is the
+  // discoverable order path; the long-press right click is the power shortcut. Everything
+  // routes to existing exports — no engine changes.
+  const LONG_MS = 350, DBL_MS = 300, MOVE_PX = 12, MOVE2 = MOVE_PX * MOVE_PX;
+  const d2 = (ax, ay, bx, by) => (ax - bx) ** 2 + (ay - by) ** 2;
+  let tt = null;                            // the active gesture, or null
+  let lastTap = { t: -1e9, x: 0, y: 0 };    // for double-tap detection
+  // Park the engine cursor off-screen after a gesture: otherwise its last position lingers
+  // and, if that was near a screen edge, edge-scroll keeps running with no finger down.
+  const park = () => x.openbw_mouse_move(-1, -1);
+
+  canvas.addEventListener('touchstart', (e) => {
+    e.preventDefault();
+    if (tt) return;                         // already tracking a finger; ignore extras
+    const t = e.changedTouches[0];
+    const [px, py] = xy(t);
+    tt = { id: t.identifier, x0: px, y0: py, x: px, y: py, mode: 'pending', armed: false };
+    tt.timer = setTimeout(() => { if (tt) tt.armed = true; }, LONG_MS);   // long-press fires
+  }, { passive: false });
+
+  canvas.addEventListener('touchmove', (e) => {
+    if (!tt) return;
+    e.preventDefault();
+    const t = [...e.changedTouches].find((c) => c.identifier === tt.id);
+    if (!t) return;
+    const [px, py] = xy(t);
+    const far = d2(px, py, tt.x0, tt.y0) > MOVE2;
+    if (tt.mode === 'pending' && far) {
+      clearTimeout(tt.timer);
+      if (tt.armed) {                       // long-press held, now dragging → box select
+        tt.mode = 'box';
+        x.openbw_mouse_move(tt.x0, tt.y0);
+        x.openbw_mouse_button(1, 1, tt.x0, tt.y0, 1);   // left down at the press point
+        x.openbw_mouse_move(px, py);
+      } else {                              // moved before the long-press → pan
+        tt.mode = 'pan';
+      }
+    } else if (tt.mode === 'pan') {
+      x.openbw_pan(tt.x - px, tt.y - py);   // drag the world with the finger
+    } else if (tt.mode === 'box') {
+      x.openbw_mouse_move(px, py);          // grow the selection rectangle
+    }
+    tt.x = px; tt.y = py;
+  }, { passive: false });
+
+  const endTouch = (e) => {
+    if (!tt) return;
+    e.preventDefault();
+    const t = [...e.changedTouches].find((c) => c.identifier === tt.id);
+    if (!t) return;                         // a different finger lifted
+    clearTimeout(tt.timer);
+    const [px, py] = xy(t);
+    if (tt.mode === 'box') {
+      x.openbw_mouse_button(0, 1, px, py, 1);           // left up completes the box
+    } else if (tt.mode === 'pending' && tt.armed) {
+      x.openbw_mouse_button(1, 3, tt.x0, tt.y0, 1);     // long-press, no drag → right click
+      x.openbw_mouse_button(0, 3, tt.x0, tt.y0, 1);
+    } else if (tt.mode === 'pending') {
+      const now = performance.now();
+      const dbl = now - lastTap.t < DBL_MS && d2(px, py, lastTap.x, lastTap.y) < MOVE2 * 4;
+      const clicks = dbl ? 2 : 1;                        // clicks=2 → engine select-all-of-type
+      x.openbw_mouse_move(px, py);
+      x.openbw_mouse_button(1, 1, px, py, clicks);
+      x.openbw_mouse_button(0, 1, px, py, clicks);
+      lastTap = { t: now, x: px, y: py };
+    }
+    // 'pan' → nothing to emit on release
+    tt = null;
+    park();
+  };
+  canvas.addEventListener('touchend', endTouch, { passive: false });
+  canvas.addEventListener('touchcancel', () => { if (tt) { clearTimeout(tt.timer); tt = null; park(); } },
+                          { passive: false });
 }
 
 // ---------------------------------------------------------------------------
