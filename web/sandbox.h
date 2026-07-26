@@ -1244,6 +1244,7 @@ struct play_ui : ui_functions {
 	void issue_target(xy pos) {
 		unit_t* target = select_get_unit_at(pos);
 		if (target && pending_targ != T_PATROL) flash_target(target);
+		show_marker(pos);
 		sync_selection();
 		bool q = key_shift();
 		switch (pending_targ) {
@@ -1417,6 +1418,37 @@ struct play_ui : ui_functions {
 	static const int FLASH_PHASE = 60, FLASH_TOTAL = 180;   // ~1s per phase: show / hide / show
 	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = FLASH_TOTAL; } }
 
+	// The animated click marker BW drops where you order — the real Cursor_Marker sprite,
+	// but drawn client-side (never a sim create_thingy, which would advance sprite/RNG state
+	// and desync multiplayer). Plays through the GRP's frames once over its short life.
+	xy marker_pos;
+	int marker_frames = 0;
+	static const int MARKER_TOTAL = 24;
+	void show_marker(xy pos) { marker_pos = pos; marker_frames = MARKER_TOTAL; }
+	void draw_cursor_marker(uint8_t* data, size_t pitch) {
+		if (marker_frames <= 0) return;
+		--marker_frames;
+		auto* it = get_image_type(ImageTypes::IMAGEID_Cursor_Marker);
+		auto* grp = global_st.image_grp[(size_t)it->id];
+		if (grp->frames.empty()) return;
+		int nf = (int)grp->frames.size();
+		int idx = (MARKER_TOTAL - 1 - marker_frames) * nf / MARKER_TOTAL;
+		if (idx >= nf) idx = nf - 1;
+		auto& frame = grp->frames.at(idx);
+		xy mp = marker_pos;
+		mp.x += (int)frame.offset.x - (int)grp->width / 2;
+		mp.y += (int)frame.offset.y - (int)grp->height / 2;
+		int sx = mp.x - screen_pos.x, sy = mp.y - screen_pos.y;
+		if (sx >= (int)screen_width || sy >= (int)screen_height) return;
+		size_t w = frame.size.x, h = frame.size.y;
+		if (sx + (int)w <= 0 || sy + (int)h <= 0) return;
+		size_t ox = sx < 0 ? (size_t)-sx : 0, oy = sy < 0 ? (size_t)-sy : 0;
+		uint8_t* dst = data + sy * pitch + sx;
+		w = std::min(w, screen_width - sx);
+		h = std::min(h, screen_height - sy);
+		draw_frame(frame, false, dst, pitch, ox, oy, w, h, [](uint8_t v, uint8_t) { return v; });
+	}
+
 	// A clipped ellipse outline (midpoint) in screen space — the target ring. Rendering
 	// only, so ordinary float math is fine (not part of the deterministic sim).
 	// Draw a unit's actual selection circle sprite in a specific colour. Mirrors
@@ -1564,6 +1596,7 @@ struct play_ui : ui_functions {
 		ui_functions::draw_callback(data, data_pitch);
 		draw_order_lines(data, data_pitch);
 		draw_target_flash(data, data_pitch);
+		draw_cursor_marker(data, data_pitch);
 
 		if (!pending_build) return;
 		if (place_ok_color < 0) {
@@ -1665,6 +1698,7 @@ struct play_ui : ui_functions {
 				target = select_get_unit_at(map_pos);
 			}
 			if (target) flash_target(target);
+			show_marker(map_pos);
 			sync_selection();
 			cmd_default_order(map_pos, target, key_shift());
 			if (unit_t* u = primary_selected())
