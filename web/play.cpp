@@ -15,6 +15,7 @@
 //   OPENBW_DEMO=1             with SCREENSHOT: script a worker + building
 //   OPENBW_NETTEST=<n>        command-byte vs direct-call determinism harness
 //   OPENBW_FOGTEST=<n>        assert fog of war is per-player in a 2-player melee
+//   OPENBW_REPCHECK=<rep>     play a real retail .rep through OpenBW; interop step 1
 
 #include "sandbox.h"
 #include "replay.h"
@@ -310,6 +311,69 @@ int run_reptest(const char* data_dir, const char* map_file, race_t my_race, int 
 	return ok ? 0 : 1;
 }
 
+// Retail-interop feasibility, step 1: load a REAL retail-recorded .rep and play it all the
+// way through OpenBW's own replay reader. If a genuine multiplayer game plays clean to its
+// recorded end frame, OpenBW's simulation tracks retail closely enough that live interop is
+// worth pursuing. An exception, or stopping short of the end, means the sim diverges there —
+// which would desync against a live retail game, so interop is blocked until it's fixed.
+// The .rep path arrives via OPENBW_REPCHECK.
+int run_repcheck(const char* data_dir, const char* rep_file) {
+	auto load = data_loading::data_files_directory(data_dir);
+	game_player p(load);
+	replay_state rs; action_state as;
+	replay_functions rf(p.st(), as, rs);
+	state& st = p.st();
+
+	ui::log("repcheck: loading %s\n", rep_file);
+	try {
+		rf.load_replay_file(rep_file);
+	} catch (const std::exception& e) {
+		ui::log("repcheck: FAILED to load — %s\n", e.what());
+		ui::log("repcheck: (OpenBW targets 1.16.1; a Remastered-only replay may not parse)\n");
+		return 1;
+	}
+
+	ui::log("repcheck: map '%s'  %dx%d tiles  end_frame=%d  game_type=%d\n",
+	        st.game->scenario_name, (int)st.game->map_tile_width, (int)st.game->map_tile_height,
+	        rs.end_frame, rs.game_type);
+	int active = 0;
+	for (int i = 0; i != 12; ++i)
+		if (st.players[i].controller == player_t::controller_occupied) {
+			ui::log("repcheck:   slot %d  race=%d  name='%s'\n",
+			        i, (int)st.players[i].race, rs.player_name[i].c_str());
+			++active;
+		}
+	ui::log("repcheck: %d active players\n", active);
+
+	bool ok = true;
+	try {
+		while (!rf.is_done()) {
+			rf.next_frame();
+			if (st.current_frame % 3000 == 0) {
+				a_string counts;
+				for (int i = 0; i != 12; ++i)
+					if (st.players[i].controller == player_t::controller_occupied)
+						counts += format(" p%d=%d", i, count_units(st, i)).c_str();
+				ui::log("repcheck:   frame %6d/%d  checksum=%08x  units:%s\n",
+				        (int)st.current_frame, rs.end_frame, sim_checksum(st), counts.c_str());
+			}
+		}
+	} catch (const std::exception& e) {
+		ui::log("repcheck: *** DIVERGED — exception at frame %d: %s\n", (int)st.current_frame, e.what());
+		ok = false;
+	}
+
+	bool complete = ok && (int)st.current_frame == rs.end_frame;
+	ui::log("repcheck: reached frame %d of %d  final checksum=%08x\n",
+	        (int)st.current_frame, rs.end_frame, sim_checksum(st));
+	// Retail replays don't carry their per-turn sync checksums, so we can't compare values
+	// directly — but a clean run to the recorded end is the signal we're after.
+	ui::log("repcheck: %s\n", complete
+	        ? "PLAYED CLEAN TO END — sim tracks retail; interop worth pursuing"
+	        : "INCOMPLETE / DIVERGED — interop blocked here");
+	return complete ? 0 : 1;
+}
+
 int run_nettest(const char* data_dir, const char* map_file, int my_player, race_t my_race, int frames) {
 	auto load = data_loading::data_files_directory(data_dir);
 	game_player pa(load), pb(load);
@@ -577,6 +641,7 @@ int main(int argc, char** argv) {
 	const char* wintest = getenv("OPENBW_WINTEST");
 	if (wintest) return run_wintest(data_dir, map_file, my_player, atoi(wintest));
 	if (const char* rt = getenv("OPENBW_REPTEST")) return run_reptest(data_dir, map_file, my_race, atoi(rt));
+	if (const char* rc = getenv("OPENBW_REPCHECK")) return run_repcheck(data_dir, rc);
 
 	const char* fogtest = getenv("OPENBW_FOGTEST");
 	if (fogtest) return run_fogtest(data_dir, map_file, atoi(fogtest));
