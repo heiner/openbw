@@ -1097,6 +1097,7 @@ const COUNTDOWN = 5, LOCK_AT = 2;
 const mp = {
   setup: $('mp-setup'),
   host: $('mp-host'), join: $('mp-join'),
+  relayUrl: $('mp-relay-url'), relayHost: $('mp-relay-host'), relayJoin: $('mp-relay-join'),
   stepInvite: $('mp-step-invite'), inviteHint: $('mp-invite-hint'),
   inInvite: $('mp-in-invite'), accept: $('mp-accept'),
   stepShare: $('mp-step-share'), shareHint: $('mp-share-hint'), out: $('mp-out'), copy: $('mp-copy'),
@@ -1234,21 +1235,73 @@ function mpCountdown(n) {
   }
 }
 
+// Lobby control messages, shared by the copy-paste (PeerLink) and relay (RelayLink)
+// transports since both are just a channel underneath.
+function mpOnControl(msg) {
+  if (msg.t === 'race') {
+    mpPeerRace = msg.race;
+    if (mpRole) mp.r[mpTheirs()].value = String(msg.race);
+    mpUpdateLobby();
+    return;
+  }
+  if (msg.t === 'tick') { mpCountdown(msg.n); return; }
+  if (msg.t === 'start') { mpBoot(msg.slots, msg.you); return; }
+}
+
 function mpNewLink(net, onOpen) {
   return new net.PeerLink({
     onOpen,
-    onControl: (msg) => {
-      if (msg.t === 'race') {
-        mpPeerRace = msg.race;
-        if (mpRole) mp.r[mpTheirs()].value = String(msg.race);
-        mpUpdateLobby();
-        return;
-      }
-      if (msg.t === 'tick') { mpCountdown(msg.n); return; }
-      if (msg.t === 'start') { mpBoot(msg.slots, msg.you); return; }
-    },
+    onControl: mpOnControl,
     onClose: (why) => mpSay('Connection ' + why + '.', 'err'),
   });
+}
+
+// Relay transport: both players connect to the same openbw_bridge address (the host runs
+// it and shares its LAN URL — the "direct cable" model, no copy-paste). The host announces
+// the game with a `hello` once the peer joins; the joiner verifies the map and enters the
+// lobby. Everything after connection is identical to the copy-paste path.
+async function mpRelayHost(url) {
+  if (!mpSetRole('host')) return;
+  try {
+    const net = await mpNet();
+    const hash = await mapHash(mpMap);
+    mpLink = new net.RelayLink({
+      onOpen: () => {   // peer joined the relay
+        mpLink.sendControl({ t: 'hello', v: net.PROTOCOL, map: mpMap, hash, race: +mp.r[mpMine()].value });
+        mpEnterLobby();
+        mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value });
+      },
+      onControl: mpOnControl,
+      onClose: (why) => mpSay('Connection ' + why + '.', 'err'),
+    });
+    await mpLink.connect(url);
+    mpSay('Relay ready — waiting for a friend to join.');
+  } catch (e) { mpSay(e.message, 'err'); mpResetRole(); }
+}
+
+async function mpRelayJoin(url) {
+  if (!mpSetRole('join')) return;
+  try {
+    const net = await mpNet();
+    mpLink = new net.RelayLink({
+      onControl: (msg) => {
+        if (msg.t === 'hello') {
+          if (msg.v !== net.PROTOCOL) { mpSay(`Version mismatch (you v${net.PROTOCOL}, host v${msg.v}) — reload.`, 'err'); return; }
+          mpMap = msg.map; mpPeerRace = msg.race;
+          mapHash(mpMap).then((h) => {
+            if (h !== msg.hash) { mpSay('Map differs from the host.', 'err'); mpLink.close(); return; }
+            mpEnterLobby();
+            mpLink.sendControl({ t: 'race', race: +mp.r[mpMine()].value });
+          }).catch(() => mpSay('That map isn’t available here.', 'err'));
+          return;
+        }
+        mpOnControl(msg);
+      },
+      onClose: (why) => mpSay('Connection ' + why + '.', 'err'),
+    });
+    await mpLink.connect(url);
+    mpSay('Connected to relay — waiting for the host.');
+  } catch (e) { mpSay(e.message, 'err'); mpResetRole(); }
 }
 
 mp.host.onclick = async () => {
@@ -1325,6 +1378,12 @@ mp.join.onclick = () => {
   mpShow(mp.stepInvite, true);
   mpSay('');
 };
+
+// Relay: default to the address the page was served from (so a joiner who opened the host's
+// LAN URL already has it right; the host on localhost gets ws://localhost:8100).
+mp.relayUrl.value = `ws://${location.hostname || 'localhost'}:8100`;
+mp.relayHost.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) mpRelayHost(u); };
+mp.relayJoin.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) { mapSelect.disabled = true; mpRelayJoin(u); } };
 mp.accept.onclick = () => mpAcceptInvite(mp.inInvite.value).catch((e) => {
   mpResetRole(); mpSay(e.message, 'err'); console.error(e);
 });

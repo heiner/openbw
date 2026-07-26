@@ -187,6 +187,67 @@ export class PeerLink {
   }
 }
 
+// A drop-in alternative to PeerLink that speaks to the native openbw_bridge relay over a
+// WebSocket instead of doing a copy-paste WebRTC handshake. Same runtime surface
+// (setTurnHandler / sendTurn / sendControl / frameOf / onControl / onOpen / onClose), so the
+// Lockstep and lobby code don't care which transport they're on. onOpen fires when the PEER
+// joins the relay (matching PeerLink's "data channel open"), not when we reach the relay.
+export class RelayLink {
+  constructor({ onControl = () => {}, onOpen = () => {}, onClose = () => {} } = {}) {
+    this.onControl = onControl; this.onOpen = onOpen; this.onClose = onClose;
+    this.ws = null; this.frameOf = null;
+    this._onTurn = null; this._queued = [];
+  }
+
+  /** Connect to the relay; resolves once the socket is open (peer may join later). */
+  connect(url) {
+    return new Promise((resolve, reject) => {
+      let ws;
+      try { ws = new WebSocket(url); } catch (e) { reject(e); return; }
+      ws.binaryType = 'arraybuffer';
+      this.ws = ws;
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error('Could not reach the relay at ' + url));
+      ws.onclose = () => this.onClose('closed');
+      ws.onmessage = (e) => {
+        if (typeof e.data === 'string') {
+          const msg = JSON.parse(e.data);
+          if (msg.t === '_relay') {                       // relay meta, not a peer message
+            if (msg.peer === 'connected') this.onOpen();
+            else if (msg.peer === 'left') this.onClose('peer left');
+            else if (msg.error) this.onClose('relay ' + msg.error);
+            return;
+          }
+          this.onControl(msg);
+          return;
+        }
+        const frame = new DataView(e.data).getUint32(0, true);
+        const bytes = new Uint8Array(e.data, 4);
+        if (this._onTurn) this._onTurn(frame, bytes);
+        else if (this._queued.length < 20000) this._queued.push([frame, bytes]);
+      };
+    });
+  }
+
+  setTurnHandler(fn) {
+    this._onTurn = fn;
+    const q = this._queued; this._queued = [];
+    for (const [f, b] of q) fn(f, b);
+  }
+  sendTurn(frame, bytes) {
+    if (!this.ws || this.ws.readyState !== 1) return;
+    const buf = new Uint8Array(4 + bytes.length);
+    new DataView(buf.buffer).setUint32(0, frame, true);
+    buf.set(bytes, 4);
+    this.ws.send(buf);
+  }
+  sendControl(obj) {
+    if (this.ws && this.ws.readyState === 1)
+      this.ws.send(JSON.stringify({ f: this.frameOf ? this.frameOf() : 0, ...obj }));
+  }
+  close() { try { if (this.ws) this.ws.close(); } catch {} }
+}
+
 export class Lockstep {
   /**
    * @param {object}  o

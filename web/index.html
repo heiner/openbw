@@ -137,6 +137,9 @@
     border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
   #mp { margin-top: 18px; padding-top: 14px; border-top: 1px solid #1e293b; text-align: left; }
   #mp h2 { font-size: 13px; margin: 0 0 8px; color: #94a3b8; font-weight: 600; text-align: center; }
+  #mp-relay { margin-top: 10px; padding-top: 10px; border-top: 1px dashed #1e293b; }
+  #mp-relay .hint { margin-top: 6px; font-size: 11px; color: #64748b; text-align: center; }
+  #mp-relay code { background: #1e293b; border-radius: 3px; padding: 1px 4px; }
   #mp .row { display: flex; gap: 8px; align-items: center; justify-content: center; margin: 8px 0; }
   #mp select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155; border-radius: 6px;
     padding: 4px 8px; font: inherit; cursor: pointer; }
@@ -286,6 +289,21 @@
       <div class="row" id="mp-setup">
         <button id="mp-host">Host a game</button>
         <button id="mp-join">Join with a code</button>
+      </div>
+
+      <!-- Relay (openbw_bridge): the host runs the relay and shares its address; no paste.
+           Falls back to copy-paste above when you don't want to run anything. -->
+      <div id="mp-relay">
+        <div class="codeline">
+          <input id="mp-relay-url" type="text" spellcheck="false" autocomplete="off"
+                 placeholder="ws://host-ip:8100">
+        </div>
+        <div class="row">
+          <button id="mp-relay-host">Host on relay</button>
+          <button id="mp-relay-join">Join on relay</button>
+        </div>
+        <div class="hint">Run <code>openbw_bridge</code> on the host, share its
+          <code>ws://&lt;LAN-IP&gt;:8100</code>. No copy-paste.</div>
       </div>
 
       <!-- Joiner without a link: the only place anything is pasted in by a joiner. -->
