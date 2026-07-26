@@ -175,9 +175,11 @@ OPENBW_EXPORT(openbw_step) void openbw_step() {
 }
 
 // Render the current state into the framebuffer and process input. JS drives
-// this from requestAnimationFrame.
-OPENBW_EXPORT(openbw_render) void openbw_render() {
-	if (g_ui) g_ui->update();
+// this from requestAnimationFrame, passing performance.now() so time-based UI
+// effects (the target-ring blink, the click marker) are refresh-rate-independent
+// — a frame counter would run twice as fast on a 120 Hz display.
+OPENBW_EXPORT(openbw_render) void openbw_render(double now_ms) {
+	if (g_ui) { g_ui->ui_now = now_ms; g_ui->update(); }
 }
 
 // The current command card as "title\nKEY\tLabel\tEN\n…" — the JS host renders it.

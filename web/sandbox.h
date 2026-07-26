@@ -292,8 +292,9 @@ struct play_ui : ui_functions {
 	bool show_order_lines = false;                   // draw selected-unit order/rally lines (off by default)
 	int line_move_color = -1, line_atk_color = -1;   // order/rally line palette indices (lazy)
 	int ring_neutral_color = -1;                     // yellow ring for neutral targets (lazy)
+	double ui_now = 0;                               // wall-clock ms from JS (performance.now), for time-based UI
 	unit_id flash_unit;                              // target whose ring is flashing (0 = none)
-	int flash_frames = 0;                            // render frames left in the flash
+	double flash_start = -1;                         // ms when the flash began (-1 = idle)
 	// Event feedback: unit-ready voices on completion, "under attack" voice + minimap flash.
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
 	int alert_color = -1;                         // minimap flash palette index (lazy)
@@ -1415,24 +1416,51 @@ struct play_ui : ui_functions {
 
 	// Flash a target's ring when an order is aimed at it (attack / gather / follow), like
 	// the original's target-acquisition blink.
-	static const int FLASH_PHASE = 60, FLASH_TOTAL = 180;   // ~1s per phase: show / hide / show
-	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_frames = FLASH_TOTAL; } }
+	// Time-based (ms), so the blink is refresh-rate-independent: 1s show, 1s hide, 1s show.
+	static constexpr double FLASH_PHASE_MS = 1000, FLASH_TOTAL_MS = 3000;
+	void flash_target(unit_t* t) { if (t) { flash_unit = get_unit_id(t); flash_start = ui_now; } }
+	bool flash_showing() {
+		if (flash_start < 0) return false;
+		double e = ui_now - flash_start;
+		return e < FLASH_TOTAL_MS && ((int)(e / FLASH_PHASE_MS)) % 2 == 0;   // show phases 0 and 2
+	}
+	uint8_t flash_color() {
+		if (line_move_color < 0) {
+			line_move_color = nearest_palette_color(40, 240, 40);
+			line_atk_color = nearest_palette_color(240, 40, 40);
+		}
+		if (ring_neutral_color < 0) ring_neutral_color = nearest_palette_color(240, 220, 40);
+		unit_t* t = get_unit(flash_unit);
+		if (!t) return (uint8_t)line_move_color;
+		return (uint8_t)(t->owner == my_player ? line_move_color
+		              : t->owner < 8 ? line_atk_color : ring_neutral_color);
+	}
+	// Draw the flashing target ring here, inside the sprite pass, so the unit's body occludes
+	// it exactly like the normal selection circle (which is drawn the same way).
+	void draw_sprite(const sprite_t* sprite, uint8_t* data, size_t data_pitch) override {
+		if (flash_showing()) {
+			unit_t* t = get_unit(flash_unit);
+			if (t && t->sprite == sprite) draw_selection_ring(t, flash_color(), data, data_pitch);
+		}
+		ui_functions::draw_sprite(sprite, data, data_pitch);
+	}
 
 	// The animated click marker BW drops where you order — the real Cursor_Marker sprite,
 	// but drawn client-side (never a sim create_thingy, which would advance sprite/RNG state
 	// and desync multiplayer). Plays through the GRP's frames once over its short life.
 	xy marker_pos;
-	int marker_frames = 0;
-	static const int MARKER_TOTAL = 24;
-	void show_marker(xy pos) { marker_pos = pos; marker_frames = MARKER_TOTAL; }
+	double marker_start = -1;
+	static constexpr double MARKER_MS = 400;
+	void show_marker(xy pos) { marker_pos = pos; marker_start = ui_now; }
 	void draw_cursor_marker(uint8_t* data, size_t pitch) {
-		if (marker_frames <= 0) return;
-		--marker_frames;
+		if (marker_start < 0) return;
+		double e = ui_now - marker_start;
+		if (e >= MARKER_MS) { marker_start = -1; return; }
 		auto* it = get_image_type(ImageTypes::IMAGEID_Cursor_Marker);
 		auto* grp = global_st.image_grp[(size_t)it->id];
 		if (grp->frames.empty()) return;
 		int nf = (int)grp->frames.size();
-		int idx = (MARKER_TOTAL - 1 - marker_frames) * nf / MARKER_TOTAL;
+		int idx = (int)(e / MARKER_MS * nf);
 		if (idx >= nf) idx = nf - 1;
 		auto& frame = grp->frames.at(idx);
 		xy mp = marker_pos;
@@ -1481,22 +1509,6 @@ struct play_ui : ui_functions {
 
 	// The blinking target ring: the unit's own selection circle, coloured by allegiance —
 	// green for your own, yellow neutral, red enemy. ~1s per phase (show / hide / show).
-	void draw_target_flash(uint8_t* data, size_t pitch) {
-		if (flash_frames <= 0) return;
-		--flash_frames;
-		if (((FLASH_TOTAL - flash_frames) / FLASH_PHASE) % 2 != 0) return;   // middle phase hidden
-		unit_t* t = get_unit(flash_unit);
-		if (!t) { flash_frames = 0; return; }
-		if (line_move_color < 0) {
-			line_move_color = nearest_palette_color(40, 240, 40);
-			line_atk_color = nearest_palette_color(240, 40, 40);
-		}
-		if (ring_neutral_color < 0) ring_neutral_color = nearest_palette_color(240, 220, 40);
-		int color = t->owner == my_player ? line_move_color
-		          : t->owner < 8 ? line_atk_color : ring_neutral_color;
-		draw_selection_ring(t, (uint8_t)color, data, pitch);
-	}
-
 	// A clipped Bresenham line in screen space (map coords minus the camera).
 	void draw_map_line(uint8_t* data, size_t data_pitch, xy a, xy b, uint8_t color) {
 		int x0 = a.x - screen_pos.x, y0 = a.y - screen_pos.y;
@@ -1595,8 +1607,7 @@ struct play_ui : ui_functions {
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_callback(data, data_pitch);
 		draw_order_lines(data, data_pitch);
-		draw_target_flash(data, data_pitch);
-		draw_cursor_marker(data, data_pitch);
+		draw_cursor_marker(data, data_pitch);   // the ring is drawn in draw_sprite (occluded by the unit)
 
 		if (!pending_build) return;
 		if (place_ok_color < 0) {

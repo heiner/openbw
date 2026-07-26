@@ -1026,7 +1026,7 @@ async function boot(session) {
   };
 
   function frame() {
-    x.openbw_render();
+    x.openbw_render(performance.now());
     const w = x.openbw_framebuffer_width(), h = x.openbw_framebuffer_height(), ptr = x.openbw_framebuffer();
     if (w && h && ptr) {
       if (w !== iw || h !== ih) { iw = w; ih = h; canvas.width = w; canvas.height = h; image = ctx.createImageData(w, h); }

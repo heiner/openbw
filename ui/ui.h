@@ -1324,7 +1324,7 @@ struct ui_functions: ui_util_functions {
 
 	}
 
-	void draw_sprite(const sprite_t* sprite, uint8_t* data, size_t data_pitch) {
+	virtual void draw_sprite(const sprite_t* sprite, uint8_t* data, size_t data_pitch) {
 		const unit_t* draw_selection_u = current_selection_sprites_set.at(sprite->index);
 		const unit_t* draw_health_bars_u = draw_selection_u;
 		for (auto* image : ptr(reverse(sprite->images))) {
