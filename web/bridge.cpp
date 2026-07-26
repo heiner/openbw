@@ -24,11 +24,16 @@
 #include <mutex>
 #include <memory>
 #include <istream>
+#include <map>
+#include <atomic>
+#include <chrono>
+#include <functional>
 
 #define ASIO_STANDALONE
 #include "deps/asio/asio.hpp"
 
 using asio::ip::tcp;
+using asio::ip::udp;
 
 // --- SHA-1 (only needed for the WebSocket Sec-WebSocket-Accept key) ---------
 struct sha1 {
@@ -191,15 +196,174 @@ static void handle(std::shared_ptr<Client> c) {
 	fprintf(stderr, "openbw_bridge: seat %d left\n", idx);
 }
 
+// ===========================================================================
+// M2: bridge mode — one browser over WebSocket <-> one peer over UDP.
+//
+// This is the shape the retail bridge needs (browser on one side, the game's UDP
+// protocol on the other). Here the UDP peer is another openbw_bridge; in M3 it
+// becomes retail speaking Storm. The lockstep stream can't tolerate a dropped or
+// reordered turn, and UDP guarantees neither, so RUdp adds a minimal reliable,
+// ordered layer — the same job Storm's reliable layer does, and a template for it.
+//
+//   packet: [u8 type][u32 seq][u32 ack][payload...]
+//     type 0 DATA  seq = this message's number; ack = next seq we still need
+//     type 1 ACK   keepalive / pure ack (no payload)
+// ===========================================================================
+struct RUdp {
+	asio::io_service io;
+	udp::socket sock;
+	udp::endpoint peer;
+	std::mutex m;
+	uint32_t send_seq = 0, recv_next = 0;
+	std::map<uint32_t, std::string> sendbuf;   // unacked outgoing (seq -> payload)
+	std::map<uint32_t, std::string> recvbuf;   // buffered out-of-order incoming
+	std::function<void(const std::string&)> on_msg;   // in-order delivery to the app
+	std::function<void()> on_up;                       // first contact from the peer
+	std::atomic<bool> up{false};
+
+	RUdp(unsigned short listen_port, udp::endpoint peer_ep)
+		: sock(io, udp::endpoint(udp::v4(), listen_port)), peer(peer_ep) {}
+
+	void put32(std::string& s, uint32_t v) { for (int i = 3; i >= 0; --i) s.push_back((char)((v >> (i*8)) & 0xff)); }
+	static uint32_t get32(const uint8_t* p) { uint32_t v = 0; for (int i = 0; i < 4; i++) v = (v << 8) | p[i]; return v; }
+
+	// caller holds m
+	void raw_send(uint8_t type, uint32_t seq, const std::string& payload) {
+		std::string p; p.push_back((char)type); put32(p, seq); put32(p, recv_next); p += payload;
+		asio::error_code ec; sock.send_to(asio::buffer(p), peer, 0, ec);
+	}
+
+	void send(const std::string& payload) {                    // app -> peer
+		std::lock_guard<std::mutex> lk(m);
+		uint32_t s = send_seq++;
+		sendbuf[s] = payload;
+		raw_send(0, s, payload);
+	}
+
+	void recv_loop() {
+		std::vector<uint8_t> buf(65536);
+		for (;;) {
+			udp::endpoint from; asio::error_code ec;
+			size_t n = sock.receive_from(asio::buffer(buf), from, 0, ec);
+			if (ec) { if (ec == asio::error::operation_aborted) break; continue; }
+			if (n < 9) continue;
+			uint8_t type = buf[0];
+			uint32_t seq = get32(buf.data() + 1), ack = get32(buf.data() + 5);
+			bool first = false;
+			std::vector<std::string> deliver;
+			{
+				std::lock_guard<std::mutex> lk(m);
+				if (!up.exchange(true)) first = true;
+				while (!sendbuf.empty() && sendbuf.begin()->first < ack) sendbuf.erase(sendbuf.begin());
+				if (type == 0) {
+					std::string payload((const char*)buf.data() + 9, n - 9);
+					if (seq == recv_next) {
+						deliver.push_back(std::move(payload)); ++recv_next;
+						for (auto it = recvbuf.find(recv_next); it != recvbuf.end(); it = recvbuf.find(recv_next)) {
+							deliver.push_back(std::move(it->second)); recvbuf.erase(it); ++recv_next;
+						}
+					} else if (seq > recv_next) {
+						recvbuf[seq] = std::move(payload);
+					} // seq < recv_next: duplicate, drop
+					raw_send(1, 0, "");   // ack
+				}
+			}
+			if (first && on_up) on_up();
+			for (auto& d : deliver) if (on_msg) on_msg(d);
+		}
+	}
+
+	void retransmit_loop() {
+		for (;;) {
+			std::this_thread::sleep_for(std::chrono::milliseconds(60));
+			std::lock_guard<std::mutex> lk(m);
+			if (sendbuf.empty()) raw_send(1, 0, "");                       // keepalive
+			else for (auto& kv : sendbuf) raw_send(0, kv.first, kv.second); // resend unacked
+		}
+	}
+
+	void start() {
+		std::thread([this] { recv_loop(); }).detach();
+		std::thread([this] { retransmit_loop(); }).detach();
+	}
+};
+
+static int run_bridge(unsigned short ws_port, unsigned short udp_listen, udp::endpoint peer_ep) {
+	auto rudp = std::make_shared<RUdp>(udp_listen, peer_ep);
+	std::mutex bm;
+	std::shared_ptr<Client> browser;
+	std::vector<std::string> pending;   // UDP->browser messages waiting for a browser
+	bool linkup = false;
+
+	// Deliver a reliably-received message (framed [u8 opcode][payload]) to the browser,
+	// or hold it until one connects.
+	rudp->on_msg = [&](const std::string& msg) {
+		std::lock_guard<std::mutex> lk(bm);
+		if (browser && !msg.empty())
+			browser->send((uint8_t)(unsigned char)msg[0], (const uint8_t*)msg.data() + 1, msg.size() - 1);
+		else pending.push_back(msg);
+	};
+	rudp->on_up = [&] {
+		std::lock_guard<std::mutex> lk(bm);
+		linkup = true;
+		if (browser) browser->text("{\"t\":\"_relay\",\"peer\":\"connected\"}");
+	};
+	rudp->start();
+
+	asio::io_service io;
+	tcp::acceptor acc(io, tcp::endpoint(tcp::v4(), ws_port));
+	fprintf(stderr, "openbw_bridge: bridge mode — browser on ws://0.0.0.0:%d/, udp :%d <-> peer\n",
+	        ws_port, udp_listen);
+	for (;;) {
+		tcp::socket s(io); asio::error_code ec; acc.accept(s, ec); if (ec) continue;
+		auto c = std::make_shared<Client>(std::move(s));
+		if (!ws_handshake(c->sock)) continue;
+		{
+			std::lock_guard<std::mutex> lk(bm);
+			browser = c;
+			for (auto& p : pending) if (!p.empty())
+				c->send((uint8_t)(unsigned char)p[0], (const uint8_t*)p.data() + 1, p.size() - 1);
+			pending.clear();
+			c->text(linkup ? "{\"t\":\"_relay\",\"peer\":\"connected\"}" : "{\"t\":\"_relay\",\"waiting\":true}");
+		}
+		std::vector<uint8_t> payload;
+		for (;;) {
+			int op = ws_read(c->sock, payload);
+			if (op < 0 || op == 8) break;
+			if (op == 9) { c->send(10, payload.data(), payload.size()); continue; }
+			if (op == 1 || op == 2) {          // frame the WS opcode so the peer can rebuild it
+				std::string m; m.push_back((char)op);
+				m.append((const char*)payload.data(), payload.size());
+				rudp->send(m);
+			}
+		}
+		{ std::lock_guard<std::mutex> lk(bm); if (browser == c) browser.reset(); }
+	}
+}
+
 int main(int argc, char** argv) {
-	int port = 8100;
-	for (int i = 1; i < argc; i++)
-		if (!strcmp(argv[i], "--port") && i + 1 < argc) port = atoi(argv[++i]);
+	int ws_port = 8100, udp_listen = 0;
+	std::string udp_peer;
+	for (int i = 1; i < argc; i++) {
+		std::string a = argv[i];
+		if ((a == "--port" || a == "--ws-port") && i + 1 < argc) ws_port = atoi(argv[++i]);
+		else if (a == "--udp-listen" && i + 1 < argc) udp_listen = atoi(argv[++i]);
+		else if (a == "--udp-peer" && i + 1 < argc) udp_peer = argv[++i];
+	}
 
 	try {
+		if (!udp_peer.empty()) {                        // bridge mode (M2)
+			if (udp_listen == 0) udp_listen = 6112;     // Brood War's UDP port; symmetric two-machine default
+			auto colon = udp_peer.rfind(':');
+			std::string ip = udp_peer.substr(0, colon);
+			unsigned short pp = (unsigned short)atoi(udp_peer.substr(colon + 1).c_str());
+			udp::endpoint peer_ep(asio::ip::address::from_string(ip), pp);
+			return run_bridge((unsigned short)ws_port, (unsigned short)udp_listen, peer_ep);
+		}
+		// relay mode (M1)
 		asio::io_service io;
-		tcp::acceptor acc(io, tcp::endpoint(tcp::v4(), (unsigned short)port));
-		fprintf(stderr, "openbw_bridge: relay listening on ws://0.0.0.0:%d/  (share your LAN IP)\n", port);
+		tcp::acceptor acc(io, tcp::endpoint(tcp::v4(), (unsigned short)ws_port));
+		fprintf(stderr, "openbw_bridge: relay listening on ws://0.0.0.0:%d/  (share your LAN IP)\n", ws_port);
 		for (;;) {
 			tcp::socket s(io);
 			asio::error_code ec;
