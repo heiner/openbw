@@ -498,7 +498,10 @@ async function boot(session) {
   // In dev, a unique URL + no-store defeats Chrome's aggressive HTTP/compiled-
   // wasm caching so rebuilds are picked up. In production we want the opposite:
   // let the browser cache and reuse the compiled module across visits.
-  const DEV = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  // Any build whose SHA wasn't stamped in by CI is a local/dev build — including one served
+  // to a phone over a LAN IP. Treat it as dev so the wasm is fetched fresh (the ?v=__BUILD__
+  // cache-buster is a constant locally, so a plain fetch would serve a stale, skewed wasm).
+  const DEV = BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   // BUILD is replaced by CI with the commit SHA (see .github/workflows/pages.yml), so a
   // new deploy fetches a fresh wasm URL instead of a stale cached one. Locally it stays
   // the '__BUILD__' placeholder and we cache-bust per load instead.
