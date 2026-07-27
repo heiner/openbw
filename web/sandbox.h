@@ -611,20 +611,20 @@ struct play_ui : ui_functions {
 			{U::Terran_Science_Vessel, T::EMP_Shockwave, O::CastEMPShockwave, false, "EMP Shockwave", 'e'},
 			{U::Terran_Battlecruiser, T::Yamato_Gun, O::FireYamatoGun, true, "Yamato Gun", 'y'},
 			{U::Terran_Medic, T::Restoration, O::CastRestoration, true, "Restoration", 'r'},
-			{U::Terran_Medic, T::Optical_Flare, O::CastOpticalFlare, true, "Optical Flare", 'o'},
+			{U::Terran_Medic, T::Optical_Flare, O::CastOpticalFlare, true, "Optical Flare", 'f'},
 			{U::Protoss_High_Templar, T::Psionic_Storm, O::CastPsionicStorm, false, "Psionic Storm", 't'},
-			{U::Protoss_High_Templar, T::Hallucination, O::CastHallucination, true, "Hallucination", 'h'},
+			{U::Protoss_High_Templar, T::Hallucination, O::CastHallucination, true, "Hallucination", 'l'},
 			{U::Protoss_Dark_Archon, T::Feedback, O::CastFeedback, true, "Feedback", 'f'},
-			{U::Protoss_Dark_Archon, T::Maelstrom, O::CastMaelstrom, false, "Maelstrom", 'm'},
+			{U::Protoss_Dark_Archon, T::Maelstrom, O::CastMaelstrom, false, "Maelstrom", 'e'},
 			{U::Protoss_Dark_Archon, T::Mind_Control, O::CastMindControl, true, "Mind Control", 'c'},
 			{U::Protoss_Arbiter, T::Recall, O::CastRecall, false, "Recall", 'r'},
-			{U::Protoss_Arbiter, T::Stasis_Field, O::CastStasisField, false, "Stasis Field", 's'},
+			{U::Protoss_Arbiter, T::Stasis_Field, O::CastStasisField, false, "Stasis Field", 't'},
 			{U::Protoss_Corsair, T::Disruption_Web, O::CastDisruptionWeb, false, "Disruption Web", 'd'},
 			{U::Zerg_Queen, T::Ensnare, O::CastEnsnare, false, "Ensnare", 'e'},
 			{U::Zerg_Queen, T::Parasite, O::CastParasite, true, "Parasite", 'r'},
-			{U::Zerg_Queen, T::Spawn_Broodlings, O::CastSpawnBroodlings, true, "Spawn Broodlings", 'g'},
+			{U::Zerg_Queen, T::Spawn_Broodlings, O::CastSpawnBroodlings, true, "Spawn Broodlings", 'b'},
 			{U::Zerg_Defiler, T::Dark_Swarm, O::CastDarkSwarm, false, "Dark Swarm", 'w'},
-			{U::Zerg_Defiler, T::Plague, O::CastPlague, false, "Plague", 'p'},
+			{U::Zerg_Defiler, T::Plague, O::CastPlague, false, "Plague", 'g'},
 			{U::Zerg_Defiler, T::Consume, O::CastConsume, true, "Consume", 'c'},
 			// Building/free abilities. Scanner Sweep and Infest are gated by unit_can_use_tech
 			// like the rest; Nuclear Strike is special-cased below (no energy, needs a missile).
@@ -734,7 +734,7 @@ struct play_ui : ui_functions {
 		if (worker) {
 			// Carrying minerals/gas swaps Gather for Return Cargo in the same slot, as in
 			// the original.
-			if (u->carrying_flags & 3) card.push_back({'g', "Return Cargo", C_RETURN, U::None});
+			if (u->carrying_flags & 3) card.push_back({'c', "Return Cargo", C_RETURN, U::None});
 			else card.push_back({'g', "Gather", C_GATHER, U::None});
 			if (id == U::Terran_SCV) card.push_back({'r', "Repair", C_REPAIR, U::None});
 			card.push_back({'b', "Build", C_BUILDMENU, U::None});
@@ -785,10 +785,10 @@ struct play_ui : ui_functions {
 		}
 		// Carrier interceptors / Reaver scarabs are built by the unit itself.
 		if (unit_is_carrier(u)) card.push_back({pick_key("Interceptor"), "Build Interceptor", C_FIGHTER, U::Protoss_Interceptor});
-		else if (unit_is_reaver(u)) card.push_back({pick_key("Scarab"), "Build Scarab", C_FIGHTER, U::Protoss_Scarab});
-		// Two templar merge into an archon.
-		if (id == U::Protoss_High_Templar) card.push_back({pick_key("Archon"), "Merge Archon", C_ARCHON, U::Protoss_Archon});
-		else if (id == U::Protoss_Dark_Templar) card.push_back({pick_key("Dark Archon"), "Dark Archon", C_DARCHON, U::Protoss_Dark_Archon});
+		else if (unit_is_reaver(u)) card.push_back({'r', "Build Scarab", C_FIGHTER, U::Protoss_Scarab});
+		// Two templar merge into an archon. Both merges are 'r' in BW (on separate unit cards).
+		if (id == U::Protoss_High_Templar) card.push_back({'r', "Merge Archon", C_ARCHON, U::Protoss_Archon});
+		else if (id == U::Protoss_Dark_Templar) card.push_back({'r', "Dark Archon", C_DARCHON, U::Protoss_Dark_Archon});
 		// Targeted spellcaster abilities: shown once the tech is available, grayed when
 		// energy is short. The canonical key falls back to auto-assign on a collision.
 		size_t nsp; const spell_t* sp = spells(nsp);
