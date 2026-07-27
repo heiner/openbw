@@ -129,31 +129,33 @@ async function fetchWithProgress(url, expected, onProgress) {
 // Returns [stardat, broodat, patch_rt, map] as Uint8Arrays.
 async function loadAssets(mapFile = MAP_LOCAL) {
   const db = await idbOpen();
-  const out = [];
-  for (let i = 0; i < MPQS.length; i++) {
-    const { key, local, url, size } = MPQS[i];
+  const out = new Array(MPQS.length);
+
+  // Fetch the three MPQs concurrently. archive.org throttles per-connection, so
+  // three parallel downloads pull far more aggregate bandwidth than the old
+  // serial loop, and IndexedDB writes are independent so there's no contention.
+  // The bar is the sum of bytes across all three, leaving the final slice for the map.
+  const totalBytes = MPQS.reduce((s, m) => s + m.size, 0);
+  const got = new Array(MPQS.length).fill(0);
+  const MPQ_SPAN = MPQS.length / (MPQS.length + 1);
+  const renderBar = () =>
+    setBar(Math.min(1, got.reduce((a, b) => a + b, 0) / totalBytes) * MPQ_SPAN);
+  setMsg(`Downloading game data (${(totalBytes / 1e6) | 0} MB)…`);
+
+  await Promise.all(MPQS.map(async ({ key, local, url, size }, i) => {
     let buf = await idbGet(db, key);
-    if (buf) {
-      setMsg(`Loading ${key} from cache…`);
-    } else {
-      // Prefer a same-origin local mirror (dev convenience); otherwise fetch
-      // from the Internet Archive. Production hosts no game files, so the
-      // local probe 404s and the archive.org path is used.
+    if (!buf) {
+      // Same-origin local mirror is a dev convenience; production hosts no game
+      // files, so this 404s and the archive.org URL is used.
       let mirror = null;
       try { const r = await fetch(local); if (r.ok) mirror = await r.arrayBuffer(); } catch {}
-      if (mirror) {
-        setMsg(`Loading ${key} from local mirror…`);
-        buf = mirror;
-      } else {
-        setMsg(`Downloading ${key} (${(size / 1e6) | 0} MB)…`);
-        buf = await fetchWithProgress(url, size, setBar);
-      }
-      setMsg(`Caching ${key}…`);
+      buf = mirror || await fetchWithProgress(url, size, (frac) => { got[i] = frac * size; renderBar(); });
       await idbPut(db, key, buf);
     }
-    out.push(new Uint8Array(buf));
-    setBar((i + 1) / (MPQS.length + 1));
-  }
+    got[i] = size; renderBar();
+    out[i] = new Uint8Array(buf);
+  }));
+
   setMsg('Loading map…');
   // fetchMap memoises, so a map the lobby already hashed isn't downloaded twice.
   let mapBytes = null;
