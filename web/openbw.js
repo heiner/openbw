@@ -1097,6 +1097,7 @@ const COUNTDOWN = 5, LOCK_AT = 2;
 const mp = {
   setup: $('mp-setup'),
   host: $('mp-host'), join: $('mp-join'),
+  relay: $('mp-relay'),
   relayUrl: $('mp-relay-url'), relayHost: $('mp-relay-host'), relayJoin: $('mp-relay-join'),
   stepInvite: $('mp-step-invite'), inviteHint: $('mp-invite-hint'),
   inInvite: $('mp-in-invite'), accept: $('mp-accept'),
@@ -1379,11 +1380,16 @@ mp.join.onclick = () => {
   mpSay('');
 };
 
-// Relay: default to the address the page was served from (so a joiner who opened the host's
-// LAN URL already has it right; the host on localhost gets ws://localhost:8100).
-mp.relayUrl.value = `ws://${location.hostname || 'localhost'}:8100`;
-mp.relayHost.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) mpRelayHost(u); };
-mp.relayJoin.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) { mapSelect.disabled = true; mpRelayJoin(u); } };
+// Relay (openbw_bridge): experimental, built toward retail-interop that isn't practical yet,
+// so it's hidden behind a `?relay` feature flag. Copy-paste multiplayer above still works.
+if (/(\?|&)relay\b/.test(location.search)) {
+  mp.relay.style.display = 'block';
+  // default to the address the page was served from (so a joiner who opened the host's
+  // LAN URL already has it right; the host on localhost gets ws://localhost:8100).
+  mp.relayUrl.value = `ws://${location.hostname || 'localhost'}:8100`;
+  mp.relayHost.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) mpRelayHost(u); };
+  mp.relayJoin.onclick = () => { const u = mp.relayUrl.value.trim(); if (u) { mapSelect.disabled = true; mpRelayJoin(u); } };
+}
 mp.accept.onclick = () => mpAcceptInvite(mp.inInvite.value).catch((e) => {
   mpResetRole(); mpSay(e.message, 'err'); console.error(e);
 });
