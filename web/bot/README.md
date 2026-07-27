@@ -5,97 +5,112 @@ open-source BWAPI bots to WebAssembly against OpenBW's own BWAPI layer. It is
 deliberately **decoupled** from the clean web build:
 
 - `web/build-wasm.sh`, `web/wasm_main.cpp`, `web/sandbox.h` are **untouched**.
-- The only shared code is the read-only engine headers (`bwgame.h`, …).
+- The only shared code is the read-only engine headers (`bwgame.h`, …) — in fact
+  the bot builds against the **repo's own engine** (`OPENBW_DIR` = repo root), so
+  it runs the exact sim we ship in-browser.
 - Third-party code is **fetched, not committed** (`vendor/` is gitignored), the
-  same posture as the MPQs.
+  same posture as the MPQs. `openbw-bot.wasm` is a build output (also gitignored),
+  like `openbw.wasm`.
 
 The web app loads `openbw.wasm` normally and swaps to `openbw-bot.wasm` only when
 the player picks "vs Computer".
 
-## Why this works (all verified in scratch, natively + wasm32)
+## Status: it builds and plays in wasm32 ✅
 
-The stack is `bot → BWAPILIB → BWAPI/Source (server) → OpenBWData → bwgame`. It
-already exists — [OpenBW/bwapi](https://github.com/OpenBW/bwapi) is a BWAPI fork
-backed by OpenBW, and bots like Stardust already build against it.
+`./vendor.sh && ./build-wasm-bot.sh` produces `web/openbw-bot.wasm` (~5.8 MB), a
+wasm32-wasi **reactor**. Verified:
 
-Proven:
-
-| Step | Result |
+| Check | Result |
 |---|---|
-| BWAPILIB (31 TUs) under wasi-sdk `-fno-exceptions` | compiles clean |
-| Full stack (75 TUs: BWAPI server + OpenBWData + engine) under wasi-sdk | **74/75 compile**; the 1 holdout is unused LAN/TCP networking |
-| ZZZKBot vs OpenBW (native) | **plays a real game** — mines, morphs a spawning pool, pumps zerglings |
+| Full stack builds for wasm32 (engine + BWAPI server + OpenBWData + ZZZKBot) | **compiles clean**, one consistent CMake config |
+| `WebAssembly.compile` | **valid**; imports only `wasi_snapshot_preview1` (same as `openbw.wasm`) |
+| Exports | `openbw_bot_init`, `openbw_bot_step`, `openbw_bot_frame`, `_initialize` |
+| Runtime (node:wasi, real MPQs + a map) | `init` loads MPQs+map, then **ZZZKBot plays 1500+ deterministic frames, no crash** (past its ~frame-1000 pool morph) |
 
-`onFrame` runs every frame and its commands drive `bwgame` (confirmed by the game
-state evolving: supply drop when a drone morphs the pool, unit growth as lings
-hatch).
+So the whole pipeline works at runtime in the browser target, not just natively.
+
+## The stack
+
+`bot → BWAPILIB → BWAPI/Source (server) → OpenBWData → bwgame`. It already exists —
+[OpenBW/bwapi](https://github.com/OpenBW/bwapi) is a BWAPI fork backed by OpenBW.
+The one wasm-specific move is **static** bot registration (no dlopen):
+`bot_main.cpp` sets `GameImpl::specifiedModule` before `startGame`, so the server
+uses our bot directly and it shares the global `BWAPI::BroodwarPtr`.
 
 ## First bot: ZZZKBot
 
 [chriscoxe/ZZZKBot](https://github.com/chriscoxe/ZZZKBot) — AIIDE 2015 winner, a
-Zerg rush. ~6.3k LOC, **no BWTA/BWEM/boost/torch**, single-threaded. Chosen as
-the pipeline-prover; more bots (Stardust, tsc-bwai) follow the same recipe.
+Zerg rush. ~6.3k LOC, **no BWTA/BWEM/boost/torch**, single-threaded, just two
+source files (we compile `ZZZKBotAIModule.cpp`; `Dll.cpp` is the Windows entry,
+replaced by static registration). More bots follow the same recipe.
 
 ## The port recipe (what the build applies)
 
-1. **Windows/CRT shims** (`shim/`): a stub `<Windows.h>`, and `errno_t` +
-   `localtime_s` (POSIX `localtime_r`). Replaces ZZZKBot's `Dll.cpp` with a clean
-   `gameInit`/`newAIModule` entry (`bot_entry.cpp`).
-2. **Strip the ~4 file-I/O sites** (opponent modeling, logging, config, debug) —
-   the bot plays with defaults; no WASI FS needed.
-3. **Guard `OpenBWData/BWData.cpp`** networking by treating `__wasi__` like
-   `_WIN32` at ~6 sites: the three `sync_server_asio_*` includes, the unconditional
-   `tcp_server` member (→ `sync_server_noop`), and the `#ifndef _WIN32` LAN-usage
-   blocks. Single-player uses `sync_server_noop`; sockets are unused in-browser,
-   so `<netdb.h>` never needs to exist.
-4. **No 32-bit patch needed**: ZZZKBot's `(int)void*` `ClientInfo` casts are a
-   64-bit *native* problem only — wasm32 has 32-bit pointers, so they're fine.
-5. Compile with **wasi-sdk clang, `-fexceptions`** (bot-only artifact; the BWAPI
-   server throws in a few error paths). The clean `openbw.wasm` keeps
-   `-fno-exceptions`.
+The build **drives the vendored OpenBW/bwapi CMake with the wasi-sdk toolchain
+file** so every server TU gets ONE identical config. (Hand-rolling per-TU compiles
+from `compile_commands.json` dropped config CMake applies uniformly — the
+macro-generated `BW::Game`/`Unit`/`Bullet` methods came out inconsistent across
+TUs and failed to link. The toolchain-file approach fixes that.)
+
+On top of that (`patch-vendor.py`, idempotent):
+
+1. **`-fno-exceptions` + throws→abort.** The clean build is `-fno-exceptions`; the
+   BWAPI server writes ~16 error paths as `throw std::runtime_error(...)`. Rewrite
+   them to `bwapi_fatal(...)` (declared in `shim/fatal.h`, force-included) which
+   aborts. (`-fwasm-exceptions` links but hits a legacy-vs-new wasm-EH instruction
+   mix on instantiate — the same wall the pre-bot build hit.)
+2. **`__wasi__` networking guards in `OpenBWData/BW/BWData.cpp`.** Treat `__wasi__`
+   like `_WIN32` (no asio LAN/TCP — it pulls in `<netdb.h>`/sockets wasi-sdk
+   lacks): guard the `sync_server_asio_*` includes, make tcp/local/file servers
+   `sync_server_noop`, guard `bind`/`connect`, and force `default_lan_mode=NONE`
+   so single-player stays `server_n==0` (pure noop).
+3. **Two per-frame stubs.** OpenBWData left `getRandomSeed()`
+   (`ReplayHead_gameSeed_randSeed`) and `countdownTimer()` *throwing*, but BWAPI's
+   `Server.cpp` reads both **every frame** to fill the shared `GameData`. Return
+   sane deterministic values (42 — OpenBW's fixed LCG seed — and 0). The other
+   replay-only stubs stay fatal (never reached in melee play).
+4. **Windows/CRT shims** (`shim/`): a stub `<Windows.h>`, and `errno_t` +
+   `localtime_s` (POSIX `localtime_r`), force-included into the bot. ZZZKBot's
+   file-I/O (opponent modeling/logging) just **fails-open at runtime** — no WASI
+   filesystem needed, the bot plays with defaults.
+5. **dlopen no-op stub** (`shim/dlstub.c`): the AIModuleLoader path is compiled
+   but unused (we use `specifiedModule`); the stub satisfies the link.
+
+No 32-bit cast patch is needed: ZZZKBot's `(int)void*` `ClientInfo` casts are a
+64-bit-*native* problem only — wasm32 pointers are 32-bit.
 
 ## Layout
 
-    vendor.sh          fetch pinned OpenBW/bwapi + OpenBW/openbw + ZZZKBot → vendor/ (gitignored)
-    shim/              Windows.h stub, compat.h (errno_t/localtime_s)
-    bot_main.cpp       wasm reactor harness (init/step); static bot registration
+    vendor.sh          fetch mainline OpenBW/bwapi + ZZZKBot -> vendor/ (gitignored), run patch-vendor.py
+    patch-vendor.py    the localized ports (idempotent): exceptions, wasi net guards, per-frame stubs
+    shim/              Windows.h stub, compat.h (errno_t/localtime_s), fatal.h (bwapi_fatal), dlstub.c
+    bot_main.cpp       wasm reactor harness (init/step/frame); static bot registration
     bot_entry.cpp      dlopen-style entry (gameInit/newAIModule) — unused on the wasm path
-    build-wasm-bot.sh  wasi-sdk build → web/openbw-bot.wasm
+    build-wasm-bot.sh  CMake+wasi-sdk build -> web/openbw-bot.wasm
     README.md          this file
 
-## Status / remaining work
+To reproduce:
 
-Verified this session (native + wasm32, in scratch):
-- Full stack compiles for wasm32 (74/75 as-is; BWData needs the guard in recipe #3).
-- ZZZKBot's *original* source compiles for wasm32 — the `(int)void*` casts are
-  fine on 32-bit pointers, so no cast patch is needed on the wasm path.
-- **Static bot registration** works via `GameImpl::specifiedModule` — no dlopen.
-  `bot_main.cpp` uses it: `GameOwner` + `BroodwarImpl_handle`, set
-  `specifiedModule = new <Bot>`, `startGame`; step = `update()` + `nextFrame()`.
+    cd web/bot && ./vendor.sh && ./build-wasm-bot.sh
+    # standalone play check (needs Patch_rt.mpq/BrooDat.mpq/StarDat.mpq + a .scx
+    # named as in a bwapi.ini [auto_menu] block, in a preopened dir):
+    #   OPENBW_MPQ_PATH=. BWAPI_CONFIG_INI=bwapi.ini  under node:wasi
 
-Also learned while linking (scratch):
-- **Exceptions:** the BWAPI server has only **16 `throw std::runtime_error(...)`**
-  (11 BWAPI/Source, 4 OpenBWData, 0 BWAPILIB/ZZZKBot). `-fwasm-exceptions` links
-  (6 MB) but hits a legacy-vs-new wasm-EH instruction mix on instantiate, so the
-  right move (matching the main build) is **`-fno-exceptions` + convert those 16
-  throws to `abort()`** (a `bwapi_fatal(msg)` helper). This compiles cleanly.
-- **dlopen:** the AIModuleLoader path is compiled but unused (we use
-  `specifiedModule`); provide a 4-function dlopen no-op stub to satisfy the link.
-- **Build method:** hand-rolling per-TU compiles from `compile_commands.json`
-  (extracting `-I/-D/-std`) drops config that CMake applies consistently — e.g.
-  the **macro-generated `BW::Game`/`Bullet`/`Unit` methods** end up defined in
-  one TU's config but referenced under another's, causing undefined symbols. So
-  `build-wasm-bot.sh` should **drive CMake with a wasi-sdk toolchain file**
-  (`CMAKE_TOOLCHAIN_FILE`, reactor output, `-fno-exceptions`) rather than
-  re-issuing flags by hand. That guarantees one consistent config across all TUs.
+## Remaining work (in-browser wiring), in order
 
-Left to do, in order:
-1. Rework `build-wasm-bot.sh` to a **CMake + wasi-sdk toolchain** build (consistent
-   config), applying the `-fno-exceptions`/throw→abort + dlopen-stub + BWData
-   `__wasi__` guard, linking `-mexec-model=reactor` → `web/openbw-bot.wasm`, and
-   confirming it instantiates. Config (map/race) set on `autoMenuManager` directly.
-2. **Human-vs-bot variant** — the last new code. Instead of `GameOwner` owning
-   the game, construct the BWAPI game over the *sandbox's* `bwgame::state`
-   (`BWData` holds `bwgame::state&`, so it wraps an external one); `sandbox.h`
-   drives player 1 exactly as today, the bot drives player 2. Loop stays
-   human-input → `update()` → `nextFrame()` → render.
+1. **MPQ/map provisioning in-browser.** The standalone bot uses the engine's
+   *stock* file loader (real `open()` of `Patch_rt.mpq` etc. from
+   `OPENBW_MPQ_PATH`). The clean sandbox instead feeds MPQ bytes from JS via an
+   *indexed* `js_file_reader` (0=StarDat, 1=BrooDat, 2=Patch_rt, 3=map — see
+   `web/wasm_main.cpp`). To load data in-browser the bot must go through the same
+   JS path (route OpenBWData's loader through `js_file_reader`, or populate a WASI
+   in-memory FS with the bytes JS already fetched). This is the main new plumbing.
+2. **Human-vs-bot variant** — the last new code. Instead of `GameOwner` owning the
+   game, construct the BWAPI game over the *sandbox's* `bwgame::state` (`BWData`
+   holds `bwgame::state&`, so it wraps an external one); `sandbox.h` drives player
+   1 as today, the bot drives player 2. Loop: human input → `update()` (fires the
+   bot's `onFrame`) → `nextFrame()` → render.
+3. **Wire into the page** as a "vs Computer" mode (map/race selection; the
+   standalone path reads these from a `bwapi.ini`, the in-page path sets them on
+   `autoMenuManager`/the setup directly). Add the bot build to the Pages workflow
+   once the mode is live.

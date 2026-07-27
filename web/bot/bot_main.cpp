@@ -49,6 +49,6 @@ int openbw_bot_step() {
 }
 
 __attribute__((export_name("openbw_bot_frame")))
-int openbw_bot_frame() { return g_h ? (int)(*g_h)->bwgame.getFrameCount() : 0; }
+int openbw_bot_frame() { return BWAPI::BroodwarPtr ? BWAPI::BroodwarPtr->getFrameCount() : 0; }
 
 } // extern "C"
