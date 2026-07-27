@@ -73,11 +73,27 @@ Verified this session (native + wasm32, in scratch):
   `bot_main.cpp` uses it: `GameOwner` + `BroodwarImpl_handle`, set
   `specifiedModule = new <Bot>`, `startGame`; step = `update()` + `nextFrame()`.
 
+Also learned while linking (scratch):
+- **Exceptions:** the BWAPI server has only **16 `throw std::runtime_error(...)`**
+  (11 BWAPI/Source, 4 OpenBWData, 0 BWAPILIB/ZZZKBot). `-fwasm-exceptions` links
+  (6 MB) but hits a legacy-vs-new wasm-EH instruction mix on instantiate, so the
+  right move (matching the main build) is **`-fno-exceptions` + convert those 16
+  throws to `abort()`** (a `bwapi_fatal(msg)` helper). This compiles cleanly.
+- **dlopen:** the AIModuleLoader path is compiled but unused (we use
+  `specifiedModule`); provide a 4-function dlopen no-op stub to satisfy the link.
+- **Build method:** hand-rolling per-TU compiles from `compile_commands.json`
+  (extracting `-I/-D/-std`) drops config that CMake applies consistently — e.g.
+  the **macro-generated `BW::Game`/`Bullet`/`Unit` methods** end up defined in
+  one TU's config but referenced under another's, causing undefined symbols. So
+  `build-wasm-bot.sh` should **drive CMake with a wasi-sdk toolchain file**
+  (`CMAKE_TOOLCHAIN_FILE`, reactor output, `-fno-exceptions`) rather than
+  re-issuing flags by hand. That guarantees one consistent config across all TUs.
+
 Left to do, in order:
-1. Finalize the BWData `__wasi__` guard (recipe #3), link the objects with
-   `-mexec-model=reactor` → `web/openbw-bot.wasm`, and confirm it instantiates
-   (this closes the wasm *link*, after the compile). Config (map/race) set on
-   `autoMenuManager` directly rather than a bwapi.ini file.
+1. Rework `build-wasm-bot.sh` to a **CMake + wasi-sdk toolchain** build (consistent
+   config), applying the `-fno-exceptions`/throw→abort + dlopen-stub + BWData
+   `__wasi__` guard, linking `-mexec-model=reactor` → `web/openbw-bot.wasm`, and
+   confirming it instantiates. Config (map/race) set on `autoMenuManager` directly.
 2. **Human-vs-bot variant** — the last new code. Instead of `GameOwner` owning
    the game, construct the BWAPI game over the *sandbox's* `bwgame::state`
    (`BWData` holds `bwgame::state&`, so it wraps an external one); `sandbox.h`
