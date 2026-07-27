@@ -872,6 +872,27 @@ struct play_ui : ui_functions {
 		card_text += title;
 		card_text += '\t'; card_text += format("HP %d/%d", hp, maxhp).c_str();
 		card_text += '\t'; card_text += stat2.c_str();
+		// Status effects (field 4). Blind and parasite have no in-world overlay sprite, so
+		// this panel line is the only place they're visible; the rest also draw on the unit
+		// but listing them keeps the readout complete, as retail's status icons do.
+		a_string fx;
+		bool fx_first = true;
+		auto fx_add = [&](bool on, const char* name) {
+			if (!on) return;
+			if (!fx_first) fx += " \xc2\xb7 ";   // " · "
+			fx += name; fx_first = false;
+		};
+		fx_add(sel->stim_timer,                   "Stim");
+		fx_add(sel->defensive_matrix_hp != 0_fp8, "Matrix");
+		fx_add(sel->ensnare_timer,                "Ensnared");
+		fx_add(sel->plague_timer,                 "Plague");
+		fx_add(sel->irradiate_timer,              "Irradiated");
+		fx_add(sel->lockdown_timer,               "Locked Down");
+		fx_add(sel->stasis_timer,                 "Stasis");
+		fx_add(sel->maelstrom_timer,              "Maelstrom");
+		fx_add(sel->blinded_by,                   "Blind");
+		fx_add(sel->parasite_flags,               "Parasited");
+		card_text += '\t'; card_text += fx.c_str();
 		for (auto& c : card) {
 			// Icon frame for build/train buttons is the unit id; -1 for plain orders.
 			int icon = (c.ut != UnitTypes::None) ? (int)c.ut : -1;

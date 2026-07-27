@@ -863,6 +863,7 @@ async function boot(session) {
     let html = `<span class="title">${t0[0]}</span>`;
     if (t0[1]) html += `<span class="stat">${t0[1]}</span>`;
     if (t0[2]) html += `<span class="stat">${t0[2]}</span>`;
+    if (t0[3]) html += `<span class="fx">${t0[3]}</span>`;   // status effects (blind, parasite, …)
     const ri = getResIcons();   // mineral / gas sprite icons for the cost popup
     for (let i = 1; i < lines.length; i++) {
       const f = lines[i].split('\t');   // KEY, Label, enabled(1/0), iconUnitId(-1 = none)
