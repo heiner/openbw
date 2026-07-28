@@ -23,18 +23,22 @@ const MPQS = [
 // The melee map: a CC BY 4.0 map committed under web/maps/ and deployed with the
 // site (see web/maps/ATTRIBUTION.md). MAP_REMOTE is an optional fallback, used only
 // if a build ever ships without the map file.
-// `starts` is the number of start locations. The engine ties slot -> start location ->
-// colour, so randomising which slot each player occupies randomises both. It has to be
-// known before the map is parsed (start locations aren't populated when our setup callback
-// runs), hence the table; boot() checks it against openbw_start_locations() and warns.
-// `w`/`h` (tiles) and `tileset` are shown in the lobby and likewise cross-checked at load
-// against openbw_map_w/h/tileset (see the maps table probe in web/bot/).
+// Map metadata for the lobby (needed before the map parses; cross-checked at load). `file`
+// is fetched directly, so it can be a local path or a CORS URL — the pro/classic maps stream
+// from the bwmapdb GitHub repo, so only CC-licensed Weave is bundled. Weave is the default:
+// it renders cleanly, whereas OpenBW leaves black gaps on some maps.
+const BWDB = 'https://raw.githubusercontent.com/Lucifirius/bwmapdb/master/F0%20-%20Melee/';
 const MAPS = [
-  { name: 'Weave',       file: './maps/Weave_v1.scx',       starts: 4, w: 64,  h: 64,  tileset: 'Desert' },
-  { name: 'Benzene',     file: './maps/Benzene.scx',        starts: 2, w: 128, h: 112, tileset: 'Space'  },
-  { name: 'Concourse',   file: './maps/Concourse_v1.scx',   starts: 8, w: 128, h: 128, tileset: 'Space'  },
-  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx',  starts: 8, w: 192, h: 192, tileset: 'Jungle' },
-  { name: 'Thaw',        file: './maps/Thaw_v1.scx',        starts: 6, w: 64,  h: 64,  tileset: 'Ice'    },
+  { name: 'Weave',            file: './maps/Weave_v1.scx',                          starts: 4, w: 64,  h: 64,  tileset: 'Desert'   },
+  { name: 'Lost Temple',      file: BWDB + '(4)Lost%20Temple.scm',                  starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'Python',           file: BWDB + '~Pro/(4)Python1.3.scx',                 starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'Luna',             file: BWDB + '~Pro/(4)Luna%20The%20Final%20PGT.scx',  starts: 4, w: 128, h: 128, tileset: 'Twilight' },
+  { name: 'Nostalgia',        file: BWDB + '~Pro/(4)Nostalgia.scm',                 starts: 4, w: 128, h: 128, tileset: 'Badlands' },
+  { name: 'Neo Lost Temple',  file: BWDB + '~Pro/(4)Neo%20Lost%20Temple.scx',       starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'Longinus',         file: BWDB + '~Pro/(4)Longinus.scx',                  starts: 3, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'The Hunters',      file: BWDB + '(8)The%20Hunters.scm',                  starts: 8, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'Big Game Hunters', file: BWDB + '(8)Big%20Game%20Hunters.scm',           starts: 8, w: 128, h: 128, tileset: 'Jungle'   },
+  { name: 'Blood Bath',       file: BWDB + '(4)Blood%20Bath.scm',                   starts: 4, w: 64,  h: 64,  tileset: 'Space'    },
 ];
 const TILESETS = ['Badlands', 'Space', 'Installation', 'Ashworld', 'Jungle', 'Desert', 'Ice', 'Twilight'];
 // Pick `n` distinct start slots at random.
@@ -1165,6 +1169,23 @@ $('start-game').onclick = () => {
   // No bot -> a single occupied slot -> the sim runs non-competitive (no auto win/lose).
   boot(session).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
 };
+
+// Load any .scx/.scm from disk (read locally, never uploaded): You on slot 0, a computer
+// opponent on slot 1 if one is selected above.
+$('map-file').addEventListener('change', async (e) => {
+  const f = e.target.files && e.target.files[0];
+  if (!f) return;
+  try {
+    const bytes = new Uint8Array(await f.arrayBuffer());
+    const id = 'custom:' + f.name;
+    mapCache.set(id, bytes);   // fetchMap returns this straight from cache — no network
+    const slots = [{ slot: 0, race: resolveRace(+slotsBox._you.value) }];
+    const session = { slots, mySlot: 0, mapFile: id };
+    if (slotsBox._opps.some((s) => s.value === 'bot')) { slots.push({ slot: 1, race: BOT_RACE }); session.bot = { slot: 1 }; }
+    $('controls').style.display = 'none';
+    boot(session).catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
+  } catch (err) { setMsg('Error reading map: ' + err.message); console.error(err); }
+});
 
 // --- multiplayer: 1v1 over a copy-paste WebRTC link (direct-cable style) ------------
 // The host makes an offer; the joiner opens the link (which auto-fills it) and returns a
