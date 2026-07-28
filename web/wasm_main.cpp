@@ -237,6 +237,11 @@ OPENBW_EXPORT(openbw_set_order_lines) void openbw_set_order_lines(int on) {
 	if (g_ui) g_ui->show_order_lines = on != 0;
 }
 
+// Freeze game input (selection/orders/hotkeys and their sounds/markers) while paused.
+OPENBW_EXPORT(openbw_set_paused) void openbw_set_paused(int on) {
+	if (g_ui) g_ui->paused = on != 0;
+}
+
 // --- deterministic command stream (lockstep multiplayer) --------------------
 // Local input is serialised to BW command bytes rather than applied directly. The host
 // drains them each frame, schedules them for a later frame, ships them to peers, and every

@@ -250,6 +250,7 @@ struct play_ui : ui_functions {
 	const unit_type_t* pending_build = nullptr;   // building awaiting a placement click
 	bool pending_land = false;                    // that placement is a flying building landing
 	bool targeting = false;                       // an order awaiting a target click
+	bool paused = false;                          // frozen: ignore game input (camera still ok)
 	int mouse_x = -1, mouse_y = -1;   // off-screen until the first move, so edge-scroll stays idle at startup
 	int sound_rotation = 0;                       // rotates through a unit's ack sound range
 	unit_id ack_unit;                             // unit last (re)selected, for annoyed escalation
@@ -1713,6 +1714,16 @@ struct play_ui : ui_functions {
 		using ev = native_window::event_t;
 		if (e.type == ev::type_mouse_motion) { mouse_x = e.mouse_x; mouse_y = e.mouse_y; return false; }
 
+		if (paused) {
+			// No selection, orders, or hotkeys (nor their sounds/markers) while paused;
+			// let the base still pan (minimap click, arrow keys, edge scroll).
+			if (e.type == ev::type_mouse_button_down && e.button == 1) {
+				xy p; return minimap_point(e.mouse_x, e.mouse_y, p) ? false : true;
+			}
+			if (e.type == ev::type_mouse_button_down) return true;
+			return false;
+		}
+
 		if (e.type == ev::type_mouse_button_down && e.button == 1) {
 			if (pending_build) { place_pending(e.mouse_x, e.mouse_y); refresh_card(); return true; }
 			if (targeting) {
@@ -1736,8 +1747,9 @@ struct play_ui : ui_functions {
 				map_pos = screen_to_map(e.mouse_x, e.mouse_y);
 				target = select_get_unit_at(map_pos);
 			}
+			// On a unit, only the target flash blinks; the ground marker is for moves.
 			if (target) flash_target(target);
-			show_marker(map_pos);
+			else show_marker(map_pos);
 			sync_selection();
 			cmd_default_order(map_pos, target, key_shift());
 			if (unit_t* u = primary_selected())
