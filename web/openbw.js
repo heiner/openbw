@@ -1165,13 +1165,15 @@ renderMapInfo(); buildSlots();
 $('start-game').onclick = () => {
   $('controls').style.display = 'none';
   const file = mapSelect.value;
-  // resolveRace turns the Random sentinel (-1) into a concrete race (same helper the
-  // multiplayer lobby uses); the engine only ever sees Terran/Zerg/Protoss.
-  const slots = [{ slot: 0, race: resolveRace(+slotsBox._you.value) }];   // You occupy start location 0
+  const starts = (MAPS.find((m) => m.file === file) || {}).starts || 2;
+  // Randomise which start location each player gets (slot = start location = colour).
+  const nBots = slotsBox._opps.filter((s) => s.value === 'bot').length;
+  const picks = pickStartSlots(1 + nBots, starts);
+  // resolveRace turns the Random sentinel (-1) into a concrete race.
+  const slots = [{ slot: picks[0], race: resolveRace(+slotsBox._you.value) }];
   let botSlot = null;
-  for (const sel of slotsBox._opps)
-    if (sel.value === 'bot') { botSlot = +sel.dataset.slot; slots.push({ slot: botSlot, race: BOT_RACE }); }
-  const session = { slots, mySlot: 0, mapFile: file };
+  if (nBots) { botSlot = picks[1]; slots.push({ slot: botSlot, race: BOT_RACE }); }
+  const session = { slots, mySlot: picks[0], mapFile: file };
   if (botSlot != null) session.bot = { slot: botSlot };
   // No bot -> a single occupied slot -> the sim runs non-competitive (no auto win/lose).
   boot(session).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
