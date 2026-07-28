@@ -653,6 +653,7 @@ struct ui_functions: ui_util_functions {
 
 	virtual void play_sound(int id, xy position, const unit_t* source_unit, bool add_race_index) override {
 		if (global_volume == 0) return;
+		if (source_unit && unit_hidden_by_fog(source_unit)) return;   // no sound from units in fog
 		if (add_race_index) id += 1;
 		if ((size_t)id >= has_loaded_sound.size()) return;
 		if (!has_loaded_sound[id]) {
@@ -894,6 +895,19 @@ struct ui_functions: ui_util_functions {
 		return fog_tile_level(pos.x / 32, pos.y / 32, (uint8_t)(1 << fog_player)) != 0;
 	}
 
+	// BW hides units the moment they leave your vision. Your own units are always shown;
+	// structures and resources you've seen persist at their tile (BW shows a last-seen
+	// snapshot — we just keep the live one, close enough since they don't move); enemy
+	// mobile units in fog vanish. Governs rendering, selection, and sound.
+	bool unit_hidden_by_fog(const unit_t* u) const {
+		if (fog_player < 0) return false;
+		if (u->owner == fog_player) return false;
+		if (u->sprite->visibility_flags & (1 << fog_player)) return false;
+		if (ut_building(u) || unit_is_mineral_field(u) || unit_is(u, UnitTypes::Resource_Vespene_Geyser))
+			return !sprite_position_explored(u->sprite);
+		return true;
+	}
+
 	void draw_tiles(uint8_t* data, size_t data_pitch) {
 
 		auto screen_tile = screen_tile_bounds();
@@ -1101,6 +1115,7 @@ struct ui_functions: ui_util_functions {
 
 	a_vector<const unit_t*> current_selection_sprites_set = a_vector<const unit_t*>(2500);
 	a_vector<const sprite_t*> current_selection_sprites;
+	a_vector<uint8_t> fog_hidden_sprite = a_vector<uint8_t>(2500);   // sprite index -> fog-hidden
 
 	void draw_selection_circle(const sprite_t* sprite, const unit_t* u, uint8_t* data, size_t data_pitch) {
 		auto* image_type = get_image_type((ImageTypes)((int)ImageTypes::IMAGEID_Selection_Circle_22pixels + sprite->sprite_type->selection_circle));
@@ -1372,10 +1387,20 @@ struct ui_functions: ui_util_functions {
 			current_selection_sprites.push_back(u->sprite);
 		}
 
+		if (fog_player >= 0)
+			for (size_t i = 0; i != 12; ++i)
+				for (unit_t* u : ptr(st.player_units[i]))
+					if (unit_hidden_by_fog(u)) fog_hidden_sprite.at(u->sprite->index) = 1;
+
 		for (auto& v : sorted_sprites) {
-			if (fog_player >= 0 && !sprite_position_explored(v.second)) continue;
+			if (fog_player >= 0 && (!sprite_position_explored(v.second) || fog_hidden_sprite[v.second->index])) continue;
 			draw_sprite(v.second, data, data_pitch);
 		}
+
+		if (fog_player >= 0)
+			for (size_t i = 0; i != 12; ++i)
+				for (unit_t* u : ptr(st.player_units[i]))
+					fog_hidden_sprite.at(u->sprite->index) = 0;
 
 		for (auto* s : current_selection_sprites) {
 			current_selection_sprites_set.at(s->index) = nullptr;
@@ -1497,7 +1522,7 @@ struct ui_functions: ui_util_functions {
 			--i;
 			for (unit_t* u : ptr(st.player_units[i])) {
 				if (!unit_visble_on_minimap(u)) continue;
-				if (fog_player >= 0 && !sprite_position_explored(u->sprite)) continue;
+				if (unit_hidden_by_fog(u)) continue;
 				int color = img.player_minimap_colors.at(st.players[u->owner].color);
 				size_t w = u->unit_type->placement_size.x / 32u;
 				size_t h = u->unit_type->placement_size.y / 32u;

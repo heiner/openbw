@@ -436,6 +436,15 @@ struct play_ui : ui_functions {
 	// (annoyed) lines when the same single unit is clicked repeatedly.
 	void on_selection(bool) override {
 		if (current_selection.size() > 12) current_selection.resize(12);   // BW's 12-unit cap
+		// Can't select what you can't see: drop anything hidden by fog.
+		if (fog_player >= 0) {
+			a_vector<unit_t*> vis;
+			for (auto uid : current_selection) { unit_t* u = get_unit(uid); if (u && !unit_hidden_by_fog(u)) vis.push_back(u); }
+			if (vis.size() != current_selection.size()) {
+				current_selection_clear();
+				for (unit_t* u : vis) current_selection_add(u);
+			}
+		}
 		// BW's other selection rule: a selection is either your own units, or exactly one
 		// unit that isn't yours. You can't box up an enemy army to inspect it, and you
 		// can't mix theirs in with yours — dragging over both keeps only yours.
@@ -1341,6 +1350,7 @@ struct play_ui : ui_functions {
 
 	void issue_target(xy pos) {
 		unit_t* target = select_get_unit_at(pos);
+		if (target && unit_hidden_by_fog(target)) target = nullptr;   // can't target through fog
 		if (target && pending_targ != T_PATROL) flash_target(target);
 		show_marker(pos);
 		sync_selection();
@@ -1814,6 +1824,7 @@ struct play_ui : ui_functions {
 			} else {
 				map_pos = screen_to_map(e.mouse_x, e.mouse_y);
 				target = select_get_unit_at(map_pos);
+				if (target && unit_hidden_by_fog(target)) target = nullptr;   // right-click through fog = move
 			}
 			// On a unit, only the target flash blinks; the ground marker is for moves.
 			if (target) flash_target(target);
