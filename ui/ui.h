@@ -895,17 +895,29 @@ struct ui_functions: ui_util_functions {
 		return fog_tile_level(pos.x / 32, pos.y / 32, (uint8_t)(1 << fog_player)) != 0;
 	}
 
+	// Structures and resources persist in fog as a frozen last-seen snapshot; mobile
+	// units vanish. See unit_hidden_by_fog / draw_sprites.
+	bool unit_persists_in_fog(const unit_t* u) const {
+		return ut_building(u) || unit_is_mineral_field(u) || unit_is(u, UnitTypes::Resource_Vespene_Geyser);
+	}
+
 	// BW hides units the moment they leave your vision. Your own units are always shown;
-	// structures and resources you've seen persist at their tile (BW shows a last-seen
-	// snapshot — we just keep the live one, close enough since they don't move); enemy
-	// mobile units in fog vanish. Governs rendering, selection, and sound.
+	// persistent things you've explored are frozen (unit_frozen_by_fog), not hidden;
+	// everything else in fog vanishes. Governs rendering, selection, and sound.
 	bool unit_hidden_by_fog(const unit_t* u) const {
 		if (fog_player < 0) return false;
 		if (u->owner == fog_player) return false;
 		if (u->sprite->visibility_flags & (1 << fog_player)) return false;
-		if (ut_building(u) || unit_is_mineral_field(u) || unit_is(u, UnitTypes::Resource_Vespene_Geyser))
-			return !sprite_position_explored(u->sprite);
+		if (unit_persists_in_fog(u)) return !sprite_position_explored(u->sprite);
 		return true;
+	}
+
+	// Enemy structure/resource sitting in explored fog: draw it, but frozen at the
+	// frame it had when last seen (BW's fog-sprite snapshot).
+	bool unit_frozen_by_fog(const unit_t* u) const {
+		if (fog_player < 0 || u->owner == fog_player) return false;
+		if (u->sprite->visibility_flags & (1 << fog_player)) return false;
+		return unit_persists_in_fog(u) && sprite_position_explored(u->sprite);
 	}
 
 	void draw_tiles(uint8_t* data, size_t data_pitch) {
@@ -1116,6 +1128,12 @@ struct ui_functions: ui_util_functions {
 	a_vector<const unit_t*> current_selection_sprites_set = a_vector<const unit_t*>(2500);
 	a_vector<const sprite_t*> current_selection_sprites;
 	a_vector<uint8_t> fog_hidden_sprite = a_vector<uint8_t>(2500);   // sprite index -> fog-hidden
+	a_vector<uint8_t> fog_frozen_sprite = a_vector<uint8_t>(2500);   // sprite index -> draw frozen
+	struct fog_snapshot_t {
+		bool valid = false;
+		a_vector<image_t> images;   // last-seen images, in draw order
+	};
+	a_vector<fog_snapshot_t> fog_snapshots = a_vector<fog_snapshot_t>(2500);
 
 	void draw_selection_circle(const sprite_t* sprite, const unit_t* u, uint8_t* data, size_t data_pitch) {
 		auto* image_type = get_image_type((ImageTypes)((int)ImageTypes::IMAGEID_Selection_Circle_22pixels + sprite->sprite_type->selection_circle));
@@ -1355,6 +1373,32 @@ struct ui_functions: ui_util_functions {
 		}
 	}
 
+	// Copy a structure/resource's images while it's visible, so the exact last-seen
+	// picture (frozen mid-animation) can be replayed once it drops back into fog. The
+	// live sim keeps spawning/retiring overlays (e.g. geyser steam) — a frame freeze
+	// isn't enough, we have to keep our own static copy.
+	void snapshot_fog_sprite(const sprite_t* sprite) {
+		auto& snap = fog_snapshots.at(sprite->index);
+		snap.valid = true;
+		snap.images.clear();
+		for (const image_t* image : ptr(reverse(sprite->images))) {
+			if (i_flag(image, image_t::flag_hidden)) continue;
+			snap.images.push_back(*image);
+		}
+	}
+
+	// Draw the frozen snapshot of a fogged structure/resource. Something at an explored
+	// spot we never actually saw (built in fog) has no snapshot and stays hidden. The
+	// structure doesn't move, so the live sprite's position still places the copy.
+	void draw_fog_snapshot(const sprite_t* live, uint8_t* data, size_t data_pitch) {
+		auto& snap = fog_snapshots.at(live->index);
+		if (!snap.valid) return;
+		for (image_t& image : snap.images) {
+			image.sprite = const_cast<sprite_t*>(live);
+			draw_image(&image, data, data_pitch, st.players[live->owner].color);
+		}
+	}
+
 	a_vector<std::pair<uint32_t, const sprite_t*>> sorted_sprites;
 
 	void draw_sprites(uint8_t* data, size_t data_pitch) {
@@ -1389,18 +1433,26 @@ struct ui_functions: ui_util_functions {
 
 		if (fog_player >= 0)
 			for (size_t i = 0; i != 12; ++i)
-				for (unit_t* u : ptr(st.player_units[i]))
+				for (unit_t* u : ptr(st.player_units[i])) {
 					if (unit_hidden_by_fog(u)) fog_hidden_sprite.at(u->sprite->index) = 1;
+					else if (unit_frozen_by_fog(u)) fog_frozen_sprite.at(u->sprite->index) = 1;
+					else if (u->owner != fog_player && unit_persists_in_fog(u)) snapshot_fog_sprite(u->sprite);
+				}
 
 		for (auto& v : sorted_sprites) {
-			if (fog_player >= 0 && (!sprite_position_explored(v.second) || fog_hidden_sprite[v.second->index])) continue;
+			if (fog_player >= 0) {
+				if (!sprite_position_explored(v.second) || fog_hidden_sprite[v.second->index]) continue;
+				if (fog_frozen_sprite[v.second->index]) { draw_fog_snapshot(v.second, data, data_pitch); continue; }
+			}
 			draw_sprite(v.second, data, data_pitch);
 		}
 
 		if (fog_player >= 0)
 			for (size_t i = 0; i != 12; ++i)
-				for (unit_t* u : ptr(st.player_units[i]))
+				for (unit_t* u : ptr(st.player_units[i])) {
 					fog_hidden_sprite.at(u->sprite->index) = 0;
+					fog_frozen_sprite.at(u->sprite->index) = 0;
+				}
 
 		for (auto* s : current_selection_sprites) {
 			current_selection_sprites_set.at(s->index) = nullptr;
