@@ -1219,7 +1219,17 @@ struct play_ui : ui_functions {
 			case C_BUILDMENU: menu = 1; refresh_card(); break;
 			case C_ADVMENU:   menu = 2; refresh_card(); break;
 			case C_BUILD:     pending_build = get_unit_type(c.ut); menu = 0; refresh_card(); break;
-			case C_TRAIN:     sync_selection(); cmd_type(31, c.ut); break;
+			case C_TRAIN:     sync_selection();
+			                  if (const unit_type_t* at = get_unit_type(c.ut); at && ut_addon(at)) {
+			                      // Addons build via a placement at the auto slot (right of the
+			                      // building), not the train queue.
+			                      if (unit_t* b = primary_selected()) {
+			                          xy tl = b->sprite->position - b->unit_type->placement_size / 2;
+			                          cmds.build(Orders::PlaceAddon, c.ut,
+			                              tl.x / 32 + at->addon_position.x / 32, tl.y / 32 + at->addon_position.y / 32);
+			                      }
+			                  } else cmd_type(31, c.ut);
+			                  break;
 			case C_MORPH:     sync_selection(); cmd_type(35, c.ut); break;
 			case C_MORPHBLDG: sync_selection(); cmd_type(53, c.ut); break;
 			case C_SELECT:    select_units_of_type(c.ut); break;
