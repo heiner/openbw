@@ -1185,7 +1185,9 @@ struct ui_functions: ui_util_functions {
 		width = std::min(width, screen_width - screen_x);
 		height = std::min(height, screen_height - screen_y);
 
-		size_t color_index = st.players[sprite->owner].color;
+		// Colour the ring by the unit's owner, not the sprite's: an abandoned addon keeps its
+		// old body colour (sprite owner) but belongs to neutral, whose ring is yellow.
+		size_t color_index = st.players[u->owner].color;
 		uint8_t color = img.player_unit_colors.at(color_index)[0];
 		if (unit_is_mineral_field(u) || unit_is(u, UnitTypes::Resource_Vespene_Geyser)) {
 			color = tileset_img.resource_minimap_color;
