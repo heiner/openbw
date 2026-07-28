@@ -24,8 +24,8 @@ def patch(path, subs, required=True):
         return
     s = open(path).read()
     for old, new in subs:
-        if new in s and old not in s:
-            continue  # already applied
+        if new in s:
+            continue  # already applied (works when `new` contains `old`, i.e. insertions)
         if old not in s:
             sys.exit(f"{path}: expected snippet not found:\n{old}")
         s = s.replace(old, new, 1)
@@ -35,6 +35,7 @@ def patch(path, subs, required=True):
 
 # --- Port 1: BWData.cpp networking guards ------------------------------------
 bwdata = os.path.join(BWAPI, "OpenBWData", "BW", "BWData.cpp")
+bwh = os.path.join(BWAPI, "OpenBWData", "BW", "BWData.h")
 patch(bwdata, [
     # asio tcp include is unconditional upstream; wasi has no sockets.
     ('#include "sync_server_asio_tcp.h"\n#ifndef _WIN32\n'
@@ -110,6 +111,82 @@ patch(bwdata, [
      '  bwapi_fatal("countdownTimer?");\n}',
      'int Game::countdownTimer() const\n{\n'
      '  return 0;  // web/bot: no countdown in melee (read per-frame by Server)\n}'),
+])
+
+# --- Port 4: external-state game (the web sandbox integration). Let a BW::Game
+#     wrap an already-set-up bwgame::state instead of BWData owning/loading one, so
+#     the bot reads the sandbox's authoritative sim and its orders are captured
+#     (not fed to the sync server). See web/bot/bot_view.cpp. ---
+patch(bwdata, [
+    # openbwapi_impl: bot's slot + an order-capture sink.
+    ('  int screen_x = 0;\n  int screen_y = 0;\n',
+     '  int screen_x = 0;\n  int screen_y = 0;\n'
+     '  int external_local_player = -1;  // web/bot: bot slot when wrapping external state\n'
+     '  std::function<void(const uint8_t*, size_t)> command_sink;  // web/bot: capture orders\n'),
+    # g_LocalHumanID: return the bot's slot in external mode (no sync local_client).
+    ('int Game::g_LocalHumanID() const {\n'
+     '  return impl->sync_funcs.sync_st.local_client->player_slot;\n}',
+     'int Game::g_LocalHumanID() const {\n'
+     '  if (impl->external_local_player >= 0) return impl->external_local_player;  // web/bot\n'
+     '  return impl->sync_funcs.sync_st.local_client->player_slot;\n}'),
+    # QueueCommand: route the bot's BW command bytes to the sink if one is set.
+    ('void Game::QueueCommand(const void* buf, size_t size)\n{\n'
+     '  if (!impl->vars.is_replay) impl->game_setup_helper.input_action((const uint8_t*)buf, size);\n}',
+     'void Game::QueueCommand(const void* buf, size_t size)\n{\n'
+     '  if (impl->command_sink) { impl->command_sink((const uint8_t*)buf, size); return; }  // web/bot\n'
+     '  if (!impl->vars.is_replay) impl->game_setup_helper.input_action((const uint8_t*)buf, size);\n}'),
+    # Factory + sink setter, appended after GameOwner::getGame().
+    ('Game GameOwner::getGame()\n{\n  return {&impl->impl};\n}',
+     'Game GameOwner::getGame()\n{\n  return {&impl->impl};\n}\n\n'
+     '// web/bot: wrap an already-set-up bwgame::state (the web sandbox\'s) so a bot can\n'
+     '// read it and issue orders WITHOUT BWData owning/advancing the game. nextFrame() is\n'
+     '// never called here (the host advances the sim), so action/replay/sync stay unused;\n'
+     '// g_LocalHumanID() returns localPlayerSlot and QueueCommand routes to a sink.\n'
+     'struct ExternalGameOwner {\n'
+     '  bwgame::action_state action_st;\n'
+     '  bwgame::replay_state replay_st;\n'
+     '  bwgame::sync_state sync_st;\n'
+     '  game_vars vars;\n'
+     '  openbwapi_impl impl;\n'
+     '  ExternalGameOwner(bwgame::state& st, int localPlayerSlot)\n'
+     '    : impl(vars, st, action_st, replay_st, sync_st) {\n'
+     '    impl.external_local_player = localPlayerSlot;\n'
+     '    vars.local_player_id = localPlayerSlot;\n'
+     '    vars.game_type = 2;\n'
+     '    vars.game_type_melee = true;\n'
+     '    vars.is_replay = false;\n'
+     '  }\n'
+     '};\n\n'
+     'Game makeExternalGame(void* bwgame_state_ptr, int localPlayerSlot) {\n'
+     '  auto* owner = new ExternalGameOwner(*(bwgame::state*)bwgame_state_ptr, localPlayerSlot);\n'
+     '  return { &owner->impl };\n'
+     '}\n\n'
+     'void Game::setCommandSink(std::function<void(const uint8_t*, size_t)> f) {\n'
+     '  impl->command_sink = std::move(f);\n'
+     '}'),
+])
+
+# BWData.h: declare the two new API pieces.
+patch(bwh, [
+    ('  void QueueCommand(const void* buf, size_t size);',
+     '  void QueueCommand(const void* buf, size_t size);\n'
+     '  void setCommandSink(std::function<void(const uint8_t*, size_t)> f);  // web/bot'),
+    ('  Game getGame();\n'
+     '  void setPrintTextCallback(std::function<void(const char*)> func);\n};',
+     '  Game getGame();\n'
+     '  void setPrintTextCallback(std::function<void(const char*)> func);\n};\n\n'
+     '// web/bot: build a Game over an externally-owned bwgame::state* (see BWData.cpp).\n'
+     'Game makeExternalGame(void* bwgame_state_ptr, int localPlayerSlot);'),
+])
+
+# --- Port 5: BWData.cpp defines bwgame::ui::log_str/fatal_error_str, but so does
+#     the web sandbox (wasm_main.cpp). Make BWData's WEAK so the app's win in the
+#     combined build; standalone (bot_main.cpp) still gets these as the definition. ---
+patch(bwdata, [
+    ('void log_str(a_string str) {\n  printf("%s", str.c_str());',
+     '__attribute__((weak)) void log_str(a_string str) {\n  printf("%s", str.c_str());'),
+    ('void fatal_error_str(a_string str){\n  bwgame::error("%s", str);',
+     '__attribute__((weak)) void fatal_error_str(a_string str){\n  bwgame::error("%s", str);'),
 ])
 
 print("patch-vendor: done")

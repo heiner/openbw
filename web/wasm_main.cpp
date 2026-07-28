@@ -275,6 +275,17 @@ OPENBW_EXPORT(openbw_init_mp) void openbw_init_mp(int width, int height, int my_
 	init_game(width, height, my_slot, slots.data(), slots.size());
 }
 
+#ifdef OPENBW_WITH_BOT
+// Computer opponent (web/bot/bot_view.cpp): attach a BWAPI read-view over THIS
+// sandbox's live state so a bot can drive player `slot`. Compiled ONLY into the
+// vs-computer module (openbw-bot.wasm, built with -DOPENBW_WITH_BOT); the clean
+// openbw.wasm never sees this and is byte-identical. Call after openbw_init_mp.
+extern "C" void bot_view_attach(void* state_ptr, int slot);
+OPENBW_EXPORT(openbw_bot_attach) void openbw_bot_attach(int slot) {
+	if (g_ui) bot_view_attach(&g_ui->player.st(), slot);
+}
+#endif
+
 // 0 undecided, 1 victory, 2 defeat. Both peers derive this from the shared deterministic
 // sim, so they agree without exchanging anything.
 OPENBW_EXPORT(openbw_outcome) int openbw_outcome() { return g_ui ? g_ui->outcome : 0; }
