@@ -249,6 +249,7 @@ struct play_ui : ui_functions {
 
 	const unit_type_t* pending_build = nullptr;   // building awaiting a placement click
 	bool pending_land = false;                    // that placement is a flying building landing
+	const unit_type_t* pending_addon = nullptr;   // placing an addon: pending_build is the parent
 	bool targeting = false;                       // an order awaiting a target click
 	bool paused = false;                          // frozen: ignore game input (camera still ok)
 	int mouse_x = -1, mouse_y = -1;   // off-screen until the first move, so edge-scroll stays idle at startup
@@ -1250,7 +1251,9 @@ struct play_ui : ui_functions {
 		return hovering_unit() ? 3 : 0;
 	}
 
-	void start_target(targ_t t) { pending_build = nullptr; pending_land = false; targeting = true; pending_targ = t; }
+	void start_target(targ_t t) { clear_pending(); targeting = true; pending_targ = t; }
+
+	void clear_pending() { pending_build = nullptr; pending_land = false; pending_addon = nullptr; }
 
 	// Helpers for the flying-building commands, which act on the selected building itself.
 	xy u_pos_of_selected() { unit_t* u = primary_selected(); return u ? u->sprite->position : xy(); }
@@ -1286,16 +1289,14 @@ struct play_ui : ui_functions {
 			case C_BUILDMENU: menu = 1; refresh_card(); break;
 			case C_ADVMENU:   menu = 2; refresh_card(); break;
 			case C_BUILD:     pending_build = get_unit_type(c.ut); menu = 0; refresh_card(); break;
-			case C_TRAIN:     sync_selection();
-			                  if (const unit_type_t* at = get_unit_type(c.ut); at && ut_addon(at)) {
-			                      // Addons build via a placement at the auto slot (right of the
-			                      // building), not the train queue.
+			case C_TRAIN:     if (const unit_type_t* at = get_unit_type(c.ut); at && ut_addon(at)) {
+			                      // Addons ask for a placement (like a building): drop it in place
+			                      // for no lift, or elsewhere to lift off and move there.
 			                      if (unit_t* b = primary_selected()) {
-			                          xy tl = b->sprite->position - b->unit_type->placement_size / 2;
-			                          cmds.build(Orders::PlaceAddon, c.ut,
-			                              tl.x / 32 + at->addon_position.x / 32, tl.y / 32 + at->addon_position.y / 32);
+			                          pending_build = b->unit_type; pending_addon = at;
+			                          menu = 0; refresh_card();
 			                      }
-			                  } else cmd_type(31, c.ut);
+			                  } else { sync_selection(); cmd_type(31, c.ut); }
 			                  break;
 			case C_MORPH:     sync_selection(); cmd_type(35, c.ut); break;
 			case C_MORPHBLDG: sync_selection(); cmd_type(53, c.ut); break;
@@ -1386,18 +1387,28 @@ struct play_ui : ui_functions {
 	}
 
 	void place_pending(int mx, int my) {
+		int tx, ty;
+		placement_tile(screen_to_map(mx, my), tx, ty);   // tile of pending_build (the parent, for an addon)
+		if (pending_addon) {
+			if ((int)st.current_minerals[my_player] < pending_addon->mineral_cost) { raise_error(E_MINERALS); return; }
+			if ((int)st.current_gas[my_player] < pending_addon->gas_cost) { raise_error(E_GAS); return; }
+			sync_selection();
+			// The command carries the addon's tile; the sim derives the parent's destination
+			// from it and lifts off only when that differs from where the parent stands.
+			cmd_build(Orders::PlaceAddon, pending_addon,
+			          tx + pending_addon->addon_position.x / 32, ty + pending_addon->addon_position.y / 32);
+			clear_pending();
+			return;
+		}
 		// Landing an existing building is free; only a real build spends, and the cost is
 		// taken now, at placement — report a shortfall and keep the ghost up.
 		if (!pending_land) {
 			if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error(E_MINERALS); return; }
 			if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error(E_GAS); return; }
 		}
-		int tx, ty;
-		placement_tile(screen_to_map(mx, my), tx, ty);
 		sync_selection();
 		cmd_build(pending_land ? Orders::BuildingLand : kit.build_order, pending_build, tx, ty);
-		pending_build = nullptr;   // one-shot; re-open the menu to place another
-		pending_land = false;
+		clear_pending();   // one-shot; re-open the menu to place another
 	}
 
 	// Precompute the two tint tables (built once): each maps a source palette
@@ -1723,16 +1734,32 @@ struct play_ui : ui_functions {
 		}
 		if (ghost_ok.empty()) build_ghost_luts();
 
-		int w = pending_build->placement_size.x, h = pending_build->placement_size.y;
 		int tx, ty;
 		placement_tile(screen_to_map(mouse_x, mouse_y), tx, ty);   // snaps refineries to the geyser
-		xy center(32 * tx + w / 2, 32 * ty + h / 2);   // building's map position
 		unit_t* builder = primary_selected();
-		bool ok = builder && can_place_building(builder, my_player, pending_build, center, false, false);
+		auto ok_at = [&](const unit_type_t* t, int px, int py) {
+			xy c(32 * px + t->placement_size.x / 2, 32 * py + t->placement_size.y / 2);
+			return builder && can_place_building(builder, my_player, t, c, false, false);
+		};
 
-		// Render the completed building's first frame into a scratch buffer with the
-		// tint table applied, then dithered-blit it (checkerboard = translucency).
-		const grp_t* grp = global_st.image_grp[(size_t)pending_build->flingy->sprite->image->id];
+		if (pending_addon) {
+			int ax = tx + pending_addon->addon_position.x / 32, ay = ty + pending_addon->addon_position.y / 32;
+			draw_placement_ghost(pending_build, tx, ty, ok_at(pending_build, tx, ty), data, data_pitch);
+			draw_placement_ghost(pending_addon, ax, ay, ok_at(pending_addon, ax, ay), data, data_pitch);
+		} else {
+			draw_placement_ghost(pending_build, tx, ty, ok_at(pending_build, tx, ty), data, data_pitch);
+		}
+	}
+
+	// One placement ghost: a faded, tinted silhouette of the building's first frame plus a
+	// footprint outline so the exact tiles it will occupy are unambiguous.
+	void draw_placement_ghost(const unit_type_t* type, int tx, int ty, bool ok, uint8_t* data, size_t data_pitch) {
+		int w = type->placement_size.x, h = type->placement_size.y;
+		xy center(32 * tx + w / 2, 32 * ty + h / 2);
+
+		// Render the frame into a scratch buffer with the tint table applied, then
+		// dithered-blit it (checkerboard = translucency).
+		const grp_t* grp = global_st.image_grp[(size_t)type->flingy->sprite->image->id];
 		const auto& frame = grp->frames.at(0);
 		int fw = frame.size.x, fh = frame.size.y;
 		const uint8_t* lut = (ok ? ghost_ok : ghost_bad).data();
@@ -1813,7 +1840,7 @@ struct play_ui : ui_functions {
 		}
 		if (e.type == ev::type_mouse_button_down && e.button == 3) {
 			if (pending_build || targeting || menu) {   // cancel pending mode / submenu
-				pending_build = nullptr; pending_land = false; targeting = false; menu = 0; refresh_card();
+				clear_pending(); targeting = false; menu = 0; refresh_card();
 				return true;
 			}
 			if (current_selection.empty()) return false;   // let base pan
@@ -1836,7 +1863,7 @@ struct play_ui : ui_functions {
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.scancode == 41) {   // Escape: back out of any pending mode / submenu
-			pending_build = nullptr; pending_land = false; targeting = false; menu = 0; refresh_card();
+			clear_pending(); targeting = false; menu = 0; refresh_card();
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.sym >= '0' && e.sym <= '9') {
