@@ -342,6 +342,12 @@ OPENBW_EXPORT(openbw_reveal_map) void openbw_reveal_map() { if (g_ui) g_ui->fog_
 // playing to elimination. Bypasses the competitive gate, so it works in single-player too.
 OPENBW_EXPORT(openbw_debug_outcome) void openbw_debug_outcome(int v) { if (g_ui) g_ui->outcome = v; }
 
+OPENBW_EXPORT(openbw_debug_resources) void openbw_debug_resources(int minerals, int gas) {
+	if (!g_ui) return;
+	g_ui->st.current_minerals[g_ui->my_player] = minerals;
+	g_ui->st.current_gas[g_ui->my_player] = gas;
+}
+
 OPENBW_EXPORT(openbw_frame) int openbw_frame() { return g_ui ? (int)g_ui->st.current_frame : 0; }
 
 // Desync probe (shared implementation in sandbox.h, so native and wasm can't disagree).

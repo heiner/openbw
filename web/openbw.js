@@ -630,10 +630,13 @@ async function boot(session) {
 
   // Debug (?debug in the URL): force a win/lose to exercise the game-over screen without
   // playing to elimination. Bypasses the competitive gate, so it works in single-player.
+  let debugResourcesPending = false;
   if (/(\?|&)debug\b/.test(location.search)) {
     $('opt-debug').style.display = 'block';
     $('dbg-victory').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(1); };
     $('dbg-defeat').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(2); };
+    $('dbg-resources').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_resources(2000, 1000); };
+    debugResourcesPending = true;   // start rich; applied after the first step sets the melee start
   }
 
   // Resign: one confirming click (no blocking dialog), then concede via the sim.
@@ -779,6 +782,7 @@ async function boot(session) {
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;
       if (stepped) lastProgress = now;
+      if (stepped && debugResourcesPending) { x.openbw_debug_resources(2000, 1000); debugResourcesPending = false; }
       // Victory/defeat comes straight out of the shared sim, so both peers reach the
       // same verdict on the same frame without exchanging anything. Stop stepping once
       // it's decided — rendering and panning keep working so you can look around.
