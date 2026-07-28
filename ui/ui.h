@@ -653,7 +653,7 @@ struct ui_functions: ui_util_functions {
 
 	virtual void play_sound(int id, xy position, const unit_t* source_unit, bool add_race_index) override {
 		if (global_volume == 0) return;
-		if (source_unit && unit_hidden_by_fog(source_unit)) return;   // no sound from units in fog
+		if (!sound_audible(source_unit, position)) return;   // nothing heard through the fog
 		if (add_race_index) id += 1;
 		if ((size_t)id >= has_loaded_sound.size()) return;
 		if (!has_loaded_sound[id]) {
@@ -918,6 +918,21 @@ struct ui_functions: ui_util_functions {
 		if (fog_player < 0 || u->owner == fog_player) return false;
 		if (u->sprite->visibility_flags & (1 << fog_player)) return false;
 		return unit_persists_in_fog(u) && sprite_position_explored(u->sprite);
+	}
+
+	// You only hear what you can currently see. A sound's source is either a unit (hear it
+	// when it's in your vision — note a fog-frozen building is not) or a bare map position
+	// for iscript/weapon sounds; global UI sounds carry no position and always play.
+	bool sound_audible(const unit_t* source_unit, xy position) const {
+		if (fog_player < 0) return true;
+		if (source_unit) {
+			if (source_unit->owner == fog_player) return true;
+			return (source_unit->sprite->visibility_flags & (1 << fog_player)) != 0;
+		}
+		if (position.x <= 0 || position.y <= 0) return true;   // global sound (no position)
+		if ((size_t)(position.x / 32) >= game_st.map_tile_width) return true;
+		if ((size_t)(position.y / 32) >= game_st.map_tile_height) return true;
+		return player_position_is_visible(fog_player, position);
 	}
 
 	void draw_tiles(uint8_t* data, size_t data_pitch) {
