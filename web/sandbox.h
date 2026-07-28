@@ -821,8 +821,9 @@ struct play_ui : ui_functions {
 		// Terran buildings that fly: lift off when landed, land when airborne. A lifted
 		// building can't produce or rally, so it only ever offers Land. Lift Off is grayed
 		// while the building is busy (training, researching, upgrading, building an addon)
-		// — mirrors action_liftoff, which would refuse it anyway.
-		if (ut_flying_building(u)) {
+		// — mirrors action_liftoff, which would refuse it anyway. Not offered at all until
+		// the building has finished being built.
+		if (ut_flying_building(u) && u_completed(u)) {
 			if (u_grounded_building(u)) {
 				bool busy = unit_is_constructing(u) || unit_is_researching(u) || unit_is_upgrading(u)
 				         || !u->build_queue.empty()
