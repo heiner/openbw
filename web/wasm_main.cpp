@@ -300,6 +300,13 @@ OPENBW_EXPORT(openbw_start_locations) int openbw_start_locations() {
 	return n;
 }
 
+// Loaded-map metadata for the lobby info line + a runtime cross-check of the host's
+// table (like openbw_start_locations). Tileset index: 0 Badlands, 1 Space, 2
+// Installation, 3 Ashworld, 4 Jungle, 5 Desert, 6 Ice, 7 Twilight.
+OPENBW_EXPORT(openbw_map_w) int openbw_map_w() { return g_ui ? (int)g_ui->game_st.map_tile_width : 0; }
+OPENBW_EXPORT(openbw_map_h) int openbw_map_h() { return g_ui ? (int)g_ui->game_st.map_tile_height : 0; }
+OPENBW_EXPORT(openbw_map_tileset) int openbw_map_tileset() { return g_ui ? (int)g_ui->game_st.tileset_index : 0; }
+
 // Serialise the recorded game as a BW .rep and hand back the bytes. Returns 0 if nothing
 // was recorded. The result stays valid until the next call.
 OPENBW_EXPORT(openbw_save_replay) const uint8_t* openbw_save_replay() {

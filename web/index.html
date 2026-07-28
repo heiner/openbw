@@ -136,6 +136,13 @@
     margin: 8px 0; }
   #controls select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
     border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
+  #map-info { color: #94a3b8; font-size: 13px; margin: 2px 0 10px; }
+  #slots { display: inline-grid; grid-template-columns: auto auto; gap: 6px 10px;
+    align-items: center; text-align: left; margin: 0 auto 4px; }
+  #slots .lbl { color: #cbd5e1; font-size: 13px; }
+  #slots .you { color: #38bdf8; font-weight: 600; }
+  #slots select { min-width: 150px; }
+  #controls .hint { color: #64748b; font-size: 12px; margin: 2px 0 8px; }
   #mp { margin-top: 18px; padding-top: 14px; border-top: 1px solid #1e293b; text-align: left; }
   #mp h2 { font-size: 13px; margin: 0 0 8px; color: #94a3b8; font-weight: 600; text-align: center; }
   #mp-relay { display: none; margin-top: 10px; padding-top: 10px; border-top: 1px dashed #1e293b; }
@@ -279,13 +286,11 @@
     landscape. First run downloads ~90&nbsp;MB of game data.
   </div>
   <div id="controls" style="display:none">
-    <div class="row"><label>Map <select id="map-select"></select></label>
-      <label><input type="checkbox" id="opt-vsbot"> vs Computer (Zerg)</label></div>
-    <p>
-      <button data-race="1">Terran</button>
-      <button data-race="0">Zerg</button>
-      <button data-race="2">Protoss</button>
-    </p>
+    <div class="row"><label>Map <select id="map-select"></select></label></div>
+    <div id="map-info"></div>
+    <div id="slots"></div>
+    <div id="lobby-hint" class="hint"></div>
+    <p><button id="start-game">Start Game</button></p>
     <div id="mp">
       <h2>or play a friend (1v1)</h2>
       <div class="row" id="mp-setup">

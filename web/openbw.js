@@ -27,13 +27,16 @@ const MPQS = [
 // colour, so randomising which slot each player occupies randomises both. It has to be
 // known before the map is parsed (start locations aren't populated when our setup callback
 // runs), hence the table; boot() checks it against openbw_start_locations() and warns.
+// `w`/`h` (tiles) and `tileset` are shown in the lobby and likewise cross-checked at load
+// against openbw_map_w/h/tileset (see the maps table probe in web/bot/).
 const MAPS = [
-  { name: 'Weave',       file: './maps/Weave_v1.scx',       starts: 4 },
-  { name: 'Benzene',     file: './maps/Benzene.scx',        starts: 2 },
-  { name: 'Concourse',   file: './maps/Concourse_v1.scx',   starts: 8 },
-  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx',  starts: 8 },
-  { name: 'Thaw',        file: './maps/Thaw_v1.scx',        starts: 6 },
+  { name: 'Weave',       file: './maps/Weave_v1.scx',       starts: 4, w: 64,  h: 64,  tileset: 'Desert' },
+  { name: 'Benzene',     file: './maps/Benzene.scx',        starts: 2, w: 128, h: 112, tileset: 'Space'  },
+  { name: 'Concourse',   file: './maps/Concourse_v1.scx',   starts: 8, w: 128, h: 128, tileset: 'Space'  },
+  { name: 'Luxuriance',  file: './maps/Luxuriance_v1.scx',  starts: 8, w: 192, h: 192, tileset: 'Jungle' },
+  { name: 'Thaw',        file: './maps/Thaw_v1.scx',        starts: 6, w: 64,  h: 64,  tileset: 'Ice'    },
 ];
+const TILESETS = ['Badlands', 'Space', 'Installation', 'Ashworld', 'Jungle', 'Desert', 'Ice', 'Twilight'];
 // Pick `n` distinct start slots at random.
 function pickStartSlots(n, starts) {
   const pool = [...Array(Math.max(starts, n)).keys()];
@@ -734,6 +737,12 @@ async function boot(session) {
     const actual = x.openbw_start_locations();
     if (m && actual && m.starts !== actual)
       console.warn(`[map] ${m.name}: table says ${m.starts} start locations, map has ${actual}`);
+    // Same cross-check for the lobby's size/tileset (from the openbw_map_* exports).
+    if (m) {
+      const w = x.openbw_map_w(), h = x.openbw_map_h(), ts = TILESETS[x.openbw_map_tileset()];
+      if (m.w !== w || m.h !== h || m.tileset !== ts)
+        console.warn(`[map] ${m.name}: table says ${m.w}×${m.h} ${m.tileset}, map is ${w}×${h} ${ts}`);
+    }
   }
   if (DEV) window.__bw = { x, memory, lockstep, link };   // dev-only debugging handle
 
@@ -1089,31 +1098,71 @@ const mapSelect = $('map-select');
   });
 }
 
-// Let the user pick a race (also satisfies the "user gesture" some browsers want).
+// Solo lobby: pick your race and, for each other start location on the map, an
+// opponent — ZZZKBot (Zerg) or None. (One bot for now; the rest are empty.) The
+// slot rows rebuild when the map changes, since the map decides how many there are.
 $('controls').style.display = 'block';
-setMsg('Choose a race to begin.');
+setMsg('Set up your game.');
 // Warn on mobile: no touch controls yet, and the first run pulls ~90 MB.
 if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
     (window.matchMedia && matchMedia('(pointer: coarse)').matches))
   $('mobilewarn').style.display = 'block';
-// Only the race buttons start a solo game — the multiplayer panel lives in #controls too.
-for (const b of document.querySelectorAll('#controls button[data-race]')) {
-  b.addEventListener('click', () => {
-    $('controls').style.display = 'none';
-    const file = mapSelect.value;
-    const starts = (MAPS.find((m) => m.file === file) || {}).starts || 2;
-    const err = (e) => { setMsg('Error: ' + e.message); console.error(e); };
-    if ($('opt-vsbot').checked) {
-      // Human on slot[0], ZZZKBot (Zerg) on slot[1] — two views of one shared sim.
-      const [s0, s1] = pickStartSlots(2, starts);
-      boot({ slots: [{ slot: s0, race: +b.dataset.race }, { slot: s1, race: BOT_RACE }],
-             mySlot: s0, mapFile: file, bot: { slot: s1 } }).catch(err);
-    } else {
-      const slot = pickStartSlots(1, starts)[0];
-      boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: file }).catch(err);
-    }
-  }, { once: true });
+
+const YOU_RACES = [[1, 'Terran'], [0, 'Zerg'], [2, 'Protoss']];   // value = race_t
+const slotsBox = $('slots');
+const curMap = () => MAPS.find((m) => m.file === mapSelect.value) || MAPS[0];
+
+function renderMapInfo() {
+  const m = curMap();
+  $('map-info').textContent = `${m.w}×${m.h} · ${m.tileset} · ${m.starts} players`;
 }
+function updateHint() {
+  const anyBot = slotsBox._opps.some((s) => s.value === 'bot');
+  $('lobby-hint').textContent = anyBot ? '' : 'No opponent — sandbox mode (no win or loss).';
+}
+// (Re)build the You + opponent rows for the current map's start-location count.
+function buildSlots() {
+  const m = curMap();
+  slotsBox.innerHTML = '';
+  const you = document.createElement('select');   // slot 0 is always You
+  for (const [v, name] of YOU_RACES) you.add(new Option(name, v));
+  you.value = '1';   // default Terran
+  const youLbl = document.createElement('span'); youLbl.className = 'lbl you'; youLbl.textContent = 'You';
+  slotsBox.append(youLbl, you);
+  const opps = [];
+  for (let s = 1; s < m.starts; s++) {
+    const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'Slot ' + (s + 1);
+    const sel = document.createElement('select'); sel.dataset.slot = String(s);
+    sel.add(new Option('ZZZKBot (Zerg)', 'bot'));
+    sel.add(new Option('None', 'none'));
+    sel.value = s === 1 ? 'bot' : 'none';   // default to a 1v1 vs the bot
+    // One bot for now: picking ZZZKBot here clears any other bot slot back to None.
+    sel.onchange = () => {
+      if (sel.value === 'bot') for (const o of opps) if (o !== sel && o.value === 'bot') o.value = 'none';
+      updateHint();
+    };
+    slotsBox.append(lbl, sel);
+    opps.push(sel);
+  }
+  slotsBox._you = you; slotsBox._opps = opps;
+  updateHint();
+}
+// addEventListener (not .onchange) so the multiplayer panel's own map handler coexists.
+mapSelect.addEventListener('change', () => { renderMapInfo(); buildSlots(); });
+renderMapInfo(); buildSlots();
+
+$('start-game').onclick = () => {
+  $('controls').style.display = 'none';
+  const file = mapSelect.value;
+  const slots = [{ slot: 0, race: +slotsBox._you.value }];   // You occupy start location 0
+  let botSlot = null;
+  for (const sel of slotsBox._opps)
+    if (sel.value === 'bot') { botSlot = +sel.dataset.slot; slots.push({ slot: botSlot, race: BOT_RACE }); }
+  const session = { slots, mySlot: 0, mapFile: file };
+  if (botSlot != null) session.bot = { slot: botSlot };
+  // No bot -> a single occupied slot -> the sim runs non-competitive (no auto win/lose).
+  boot(session).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
+};
 
 // --- multiplayer: 1v1 over a copy-paste WebRTC link (direct-cable style) ------------
 // The host makes an offer; the joiner opens the link (which auto-fills it) and returns a
