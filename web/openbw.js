@@ -44,6 +44,7 @@ function pickStartSlots(n, starts) {
   return pool.slice(0, n);
 }
 const MAP_LOCAL = MAPS[0].file;
+const BOT_RACE = 0;   // ZZZKBot plays Zerg (race_t::zerg == 0)
 const MAP_REMOTE = '';
 
 // Fetched map bytes, kept so the lobby can hash a map without re-downloading it.
@@ -209,6 +210,20 @@ function makeWasi(getMemory) {
     fd_prestat_get: () => EBADF,      // no preopens
     fd_prestat_dir_name: () => EBADF,
     proc_exit(code) { throw new Error('wasm proc_exit(' + code + ')'); },
+    // The bot module (BWAPI server + ZZZKBot) pulls in a bit more of libc than the
+    // clean build: it reads env vars (none set -> defaults), touches the filesystem
+    // (there is none -> fails cleanly), and uses random_get. None affect the sim.
+    environ_sizes_get(count_out, size_out) {
+      const view = dv(); view.setUint32(count_out, 0, true); view.setUint32(size_out, 0, true); return OK;
+    },
+    environ_get: () => OK,            // empty environment
+    random_get(buf, len) {
+      crypto.getRandomValues(new Uint8Array(getMemory().buffer, buf, len)); return OK;
+    },
+    poll_oneoff(subs, events, n, nevents_out) { dv().setUint32(nevents_out, 0, true); return OK; },
+    path_unlink_file: () => EBADF,
+    path_remove_directory: () => EBADF,
+    path_rename: () => EBADF,
   };
 }
 
@@ -507,8 +522,11 @@ async function boot(session) {
   // BUILD is replaced by CI with the commit SHA (see .github/workflows/pages.yml), so a
   // new deploy fetches a fresh wasm URL instead of a stale cached one. Locally it stays
   // the '__BUILD__' placeholder and we cache-bust per load instead.
-  const wasmReq = () => DEV ? fetch('./openbw.wasm?t=' + Date.now(), { cache: 'no-store' })
-                            : fetch('./openbw.wasm?v=' + BUILD);
+  // vs-Computer loads the bot-enabled module (sandbox + BWAPI server + ZZZKBot); it
+  // exports the same surface plus openbw_bot_*, so everything else is identical.
+  const wasmName = session.bot ? 'openbw-bot.wasm' : 'openbw.wasm';
+  const wasmReq = () => DEV ? fetch('./' + wasmName + '?t=' + Date.now(), { cache: 'no-store' })
+                            : fetch('./' + wasmName + '?v=' + BUILD);
   let instance;
   try {
     ({ instance } = await WebAssembly.instantiateStreaming(wasmReq(), imports));
@@ -536,6 +554,8 @@ async function boot(session) {
   } else {
     x.openbw_init(...winSize(), slots[0].race, slots[0].slot);
   }
+  // Attach the BWAPI read-view so the bot can drive its slot (vs-Computer only).
+  if (session.bot) x.openbw_bot_attach(session.bot.slot);
   wireInput(canvas, x);
 
   // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
@@ -655,6 +675,7 @@ async function boot(session) {
     localSlot: mySlot,
     delay,
     send: (msg) => { if (link && msg.t === 'turn') link.sendTurn(msg.f, msg.d); },
+    bot: session.bot || null,
   });
   let dropped = null;   // set when the peer is gone
   let over = false;     // game finished (win / lose / disconnect) — stop stepping
@@ -1080,9 +1101,17 @@ for (const b of document.querySelectorAll('#controls button[data-race]')) {
   b.addEventListener('click', () => {
     $('controls').style.display = 'none';
     const file = mapSelect.value;
-    const slot = pickStartSlots(1, (MAPS.find((m) => m.file === file) || {}).starts || 2)[0];
-    boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: file })
-      .catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
+    const starts = (MAPS.find((m) => m.file === file) || {}).starts || 2;
+    const err = (e) => { setMsg('Error: ' + e.message); console.error(e); };
+    if ($('opt-vsbot').checked) {
+      // Human on slot[0], ZZZKBot (Zerg) on slot[1] — two views of one shared sim.
+      const [s0, s1] = pickStartSlots(2, starts);
+      boot({ slots: [{ slot: s0, race: +b.dataset.race }, { slot: s1, race: BOT_RACE }],
+             mySlot: s0, mapFile: file, bot: { slot: s1 } }).catch(err);
+    } else {
+      const slot = pickStartSlots(1, starts)[0];
+      boot({ slots: [{ slot, race: +b.dataset.race }], mySlot: slot, mapFile: file }).catch(err);
+    }
   }, { once: true });
 }
 

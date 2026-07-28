@@ -258,13 +258,16 @@ export class Lockstep {
    * @param {number}  o.delay      input delay in frames (0 solo; a few frames for a peer)
    * @param {(msg:object)=>void} o.send
    */
-  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {} }) {
+  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {}, bot = null }) {
     this.x = x;
     this.memory = memory;
     this.slots = slots.slice();
     this.localSlot = localSlot;
     this.delay = delay;
     this.send = send;
+    // A local AI producing one slot's turns (vs-Computer). It reads the shared sim and
+    // emits BW command bytes just like the human, so it's just another local producer.
+    this.bot = bot;   // { slot } or null
     this.frame = 0;           // next frame to simulate
     this.nextLocalFrame = 0;  // next frame we still owe a local batch for
     this.turns = new Map();   // frame -> Map(slot -> Uint8Array)
@@ -310,6 +313,16 @@ export class Lockstep {
     return out;
   }
 
+  /** Run the bot's onFrame for the current view and pull its commands (same framing). */
+  #drainBot() {
+    this.x.openbw_bot_tick();
+    const len = this.x.openbw_bot_out_len();
+    if (!len) return EMPTY;
+    const out = new Uint8Array(this.memory.buffer, this.x.openbw_bot_out_ptr(), len).slice();
+    this.x.openbw_bot_out_clear();
+    return out;
+  }
+
   /** Hand one player's batch to the sim. openbw_in_ptr can grow memory, so view after. */
   #apply(slot, bytes) {
     if (!bytes || !bytes.length) return;
@@ -336,6 +349,9 @@ export class Lockstep {
       const f = this.nextLocalFrame++;
       const d = this.#drainLocal();
       this.#batch(f).set(this.localSlot, d);
+      // The bot is a local producer for its slot: run its onFrame and stage its turn
+      // for the same frame. (delay is 0 vs a local bot, so f is the current frame.)
+      if (this.bot) this.#batch(f).set(this.bot.slot, this.#drainBot());
       if (this.slots.length > 1) this.send({ t: 'turn', f, d });
     }
 
