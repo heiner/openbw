@@ -96,21 +96,37 @@ To reproduce:
     # named as in a bwapi.ini [auto_menu] block, in a preopened dir):
     #   OPENBW_MPQ_PATH=. BWAPI_CONFIG_INI=bwapi.ini  under node:wasi
 
-## Remaining work (in-browser wiring), in order
+## In-browser "vs Computer" — DONE ✅
 
-1. **MPQ/map provisioning in-browser.** The standalone bot uses the engine's
-   *stock* file loader (real `open()` of `Patch_rt.mpq` etc. from
-   `OPENBW_MPQ_PATH`). The clean sandbox instead feeds MPQ bytes from JS via an
-   *indexed* `js_file_reader` (0=StarDat, 1=BrooDat, 2=Patch_rt, 3=map — see
-   `web/wasm_main.cpp`). To load data in-browser the bot must go through the same
-   JS path (route OpenBWData's loader through `js_file_reader`, or populate a WASI
-   in-memory FS with the bytes JS already fetched). This is the main new plumbing.
-2. **Human-vs-bot variant** — the last new code. Instead of `GameOwner` owning the
-   game, construct the BWAPI game over the *sandbox's* `bwgame::state` (`BWData`
-   holds `bwgame::state&`, so it wraps an external one); `sandbox.h` drives player
-   1 as today, the bot drives player 2. Loop: human input → `update()` (fires the
-   bot's `onFrame`) → `nextFrame()` → render.
-3. **Wire into the page** as a "vs Computer" mode (map/race selection; the
-   standalone path reads these from a `bwapi.ini`, the in-page path sets them on
-   `autoMenuManager`/the setup directly). Add the bot build to the Pages workflow
-   once the mode is live.
+Pick "vs Computer (Zerg)" + a race and ZZZKBot plays a live opponent, verified in
+a real browser (creep, hatchery, spawning pool, zerglings — its rush, in-tab).
+
+The design collapsed the three planned steps into one clean shape: **the sandbox
+stays the single authoritative sim; the bot is a read-VIEW over its state.**
+
+- **`build-web.sh`** builds `web/openbw-bot.wasm` = the sandbox (wasm_main +
+  wasm_backend, `-DOPENBW_WITH_BOT`) + the BWAPI server + ZZZKBot + `bot_view.cpp`.
+- **Data provisioning was obviated.** The bot reads the sandbox's already-loaded
+  `bwgame::state` (via `BW::makeExternalGame`, patch-vendor.py Port 4) — no second
+  data load, no separate `js_file_reader` plumbing.
+- **`bot_view.cpp`** runs the bot's `onFrame` (`BroodwarImpl::update()`, self-
+  contained over state reads + event dispatch) and captures the BW command bytes
+  it issues, framed like the sandbox's own.
+- **JS (`net.js` `Lockstep`)** treats the bot as another local command producer for
+  its slot: each frame it runs `openbw_bot_tick()` and drains `openbw_bot_out_*`
+  as that slot's turn — reusing the whole apply/record/step path, so vs-bot games
+  record to `.rep` too. `openbw.js` loads `openbw-bot.wasm`, sets up two slots, and
+  calls `openbw_bot_attach`; the WASI shim gained the 7 extra imports the bot pulls
+  in (`environ_*`, `random_get`, `poll_oneoff`, `path_unlink/remove/rename`).
+- **`pages.yml`** builds and ships `openbw-bot.wasm`.
+
+The clean `openbw.wasm` build is untouched (the only shared source is wasm_main's
+compile-guarded `openbw_bot_attach`; verified byte-identical, 0 bot exports).
+
+## Ideas for later
+
+- More bots (Stardust = Protoss, all-race tsc-bwai) via the same recipe + a bot
+  picker; the bot's race is currently fixed to Zerg (`BOT_RACE` in openbw.js).
+- Pin vendored commit SHAs in `vendor.sh` for reproducibility.
+- `openbw-bot-standalone` (bot_main.cpp, GameOwner + its own data load) remains as
+  the headless proof harness; not shipped.
