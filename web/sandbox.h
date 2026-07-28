@@ -1744,8 +1744,11 @@ struct play_ui : ui_functions {
 
 		if (pending_addon) {
 			int ax = tx + pending_addon->addon_position.x / 32, ay = ty + pending_addon->addon_position.y / 32;
-			draw_placement_ghost(pending_build, tx, ty, ok_at(pending_build, tx, ty), data, data_pitch);
-			draw_placement_ghost(pending_addon, ax, ay, ok_at(pending_addon, ax, ay), data, data_pitch);
+			// One placement: both the parent's new footprint and the addon's must be clear,
+			// so a bad spot for either shows the whole thing red.
+			bool ok = ok_at(pending_build, tx, ty) && ok_at(pending_addon, ax, ay);
+			draw_placement_ghost(pending_build, tx, ty, ok, data, data_pitch);
+			draw_placement_ghost(pending_addon, ax, ay, ok, data, data_pitch);
 		} else {
 			draw_placement_ghost(pending_build, tx, ty, ok_at(pending_build, tx, ty), data, data_pitch);
 		}
