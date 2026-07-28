@@ -1108,7 +1108,7 @@ if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
     (window.matchMedia && matchMedia('(pointer: coarse)').matches))
   $('mobilewarn').style.display = 'block';
 
-const YOU_RACES = [[1, 'Terran'], [0, 'Zerg'], [2, 'Protoss']];   // value = race_t
+const YOU_RACES = [[1, 'Terran'], [0, 'Zerg'], [2, 'Protoss'], [-1, 'Random']];   // value = race_t, -1 = random
 const slotsBox = $('slots');
 const curMap = () => MAPS.find((m) => m.file === mapSelect.value) || MAPS[0];
 
@@ -1154,7 +1154,9 @@ renderMapInfo(); buildSlots();
 $('start-game').onclick = () => {
   $('controls').style.display = 'none';
   const file = mapSelect.value;
-  const slots = [{ slot: 0, race: +slotsBox._you.value }];   // You occupy start location 0
+  // resolveRace turns the Random sentinel (-1) into a concrete race (same helper the
+  // multiplayer lobby uses); the engine only ever sees Terran/Zerg/Protoss.
+  const slots = [{ slot: 0, race: resolveRace(+slotsBox._you.value) }];   // You occupy start location 0
   let botSlot = null;
   for (const sel of slotsBox._opps)
     if (sel.value === 'bot') { botSlot = +sel.dataset.slot; slots.push({ slot: botSlot, race: BOT_RACE }); }
