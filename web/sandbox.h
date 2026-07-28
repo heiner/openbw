@@ -681,6 +681,60 @@ struct play_ui : ui_functions {
 		case U::Zerg_Lair: return 'l'; case U::Zerg_Hive: return 'h';
 		case U::Zerg_Greater_Spire: return 'g'; case U::Zerg_Sunken_Colony: return 'u';
 		case U::Zerg_Spore_Colony: return 's';
+		// Terran add-ons
+		case U::Terran_Comsat_Station: return 'c'; case U::Terran_Nuclear_Silo: return 'n';
+		case U::Terran_Machine_Shop: return 'c'; case U::Terran_Control_Tower: return 'c';
+		case U::Terran_Covert_Ops: return 'c'; case U::Terran_Physics_Lab: return 'p';
+		default: return 0;
+		}
+	}
+
+	// Canonical BW research/upgrade hotkeys (Liquipedia "Shortcuts"). Upgrades and
+	// researched techs get their own tables; the card falls back to auto-assign only
+	// for anything not listed here.
+	static char bw_upgrade_key(UpgradeTypes id) {
+		using U = UpgradeTypes;
+		switch (id) {
+		case U::Terran_Infantry_Weapons: case U::Terran_Vehicle_Weapons: return 'w';
+		case U::Terran_Infantry_Armor: return 'a';
+		case U::Terran_Vehicle_Plating: return 'p';
+		case U::Terran_Ship_Weapons: return 's'; case U::Terran_Ship_Plating: return 'h';
+		case U::U_238_Shells: return 'u'; case U::Caduceus_Reactor: return 'd';
+		case U::Ion_Thrusters: return 'i'; case U::Charon_Boosters: return 'c';
+		case U::Apollo_Reactor: return 'a'; case U::Titan_Reactor: return 't';
+		case U::Ocular_Implants: return 'o'; case U::Moebius_Reactor: return 'm';
+		case U::Colossus_Reactor: return 'c';
+		case U::Protoss_Ground_Weapons: case U::Protoss_Air_Weapons: return 'w';
+		case U::Protoss_Ground_Armor: case U::Protoss_Air_Armor: return 'a';
+		case U::Protoss_Plasma_Shields: case U::Singularity_Charge: case U::Scarab_Damage:
+		case U::Sensor_Array: return 's';
+		case U::Leg_Enhancements: return 'l';
+		case U::Reaver_Capacity: case U::Carrier_Capacity: return 'c';
+		case U::Gravitic_Drive: case U::Gravitic_Thrusters: case U::Gravitic_Boosters: return 'g';
+		case U::Khaydarin_Amulet: case U::Khaydarin_Core: return 'k';
+		case U::Argus_Talisman: return 't'; case U::Apial_Sensors: return 'a'; case U::Argus_Jewel: return 'j';
+		case U::Ventral_Sacs: return 'v'; case U::Antennae: return 'a'; case U::Pneumatized_Carapace: return 'p';
+		case U::Metabolic_Boost: case U::Muscular_Augments: case U::Metasynaptic_Node: return 'm';
+		case U::Adrenal_Glands: case U::Anabolic_Synthesis: return 'a';
+		case U::Grooved_Spines: case U::Gamete_Meiosis: return 'g';
+		case U::Zerg_Flyer_Attacks: case U::Zerg_Missile_Attacks: return 'a';
+		case U::Zerg_Flyer_Carapace: case U::Chitinous_Plating: case U::Zerg_Carapace: return 'c';
+		case U::Zerg_Melee_Attacks: return 'm';
+		default: return 0;
+		}
+	}
+	static char bw_research_key(TechTypes id) {
+		using T = TechTypes;
+		switch (id) {
+		case T::Stim_Packs: return 't'; case T::Restoration: return 'r'; case T::Optical_Flare: return 'f';
+		case T::Spider_Mines: return 'm'; case T::Tank_Siege_Mode: return 's'; case T::Cloaking_Field: return 'c';
+		case T::EMP_Shockwave: return 'e'; case T::Irradiate: return 'i'; case T::Lockdown: return 'l';
+		case T::Personnel_Cloaking: return 'c'; case T::Yamato_Gun: return 'y';
+		case T::Psionic_Storm: return 'p'; case T::Hallucination: return 'h'; case T::Mind_Control: return 'm';
+		case T::Maelstrom: return 'e'; case T::Disruption_Web: return 'd'; case T::Recall: return 'r';
+		case T::Stasis_Field: return 's';
+		case T::Burrowing: return 'b'; case T::Lurker_Aspect: return 'l'; case T::Spawn_Broodlings: return 'b';
+		case T::Ensnare: return 'e'; case T::Plague: return 'g'; case T::Consume: return 'c';
 		default: return 0;
 		}
 	}
@@ -723,13 +777,17 @@ struct play_ui : ui_functions {
 			const upgrade_type_t* up = get_upgrade_type((UpgradeTypes)i);
 			if (!unit_can_upgrade(u, up)) continue;
 			const char* nm = upgrade_name(up);
-			card.push_back({pick_key(nm), nm, C_UPGRADE, UnitTypes::None, false, TechTypes::None, up->id});
+			char k = bw_upgrade_key(up->id);
+			if (k) for (auto& c : card) if (c.key == k) { k = 0; break; }
+			card.push_back({k ? k : pick_key(nm), nm, C_UPGRADE, UnitTypes::None, false, TechTypes::None, up->id});
 		}
 		for (size_t i = 0; i != game_st.tech_types.vec.size(); ++i) {
 			const tech_type_t* te = get_tech_type((TechTypes)i);
 			if (!unit_can_research(u, te)) continue;
 			const char* nm = tech_name(te);
-			card.push_back({pick_key(nm), nm, C_RESEARCH, UnitTypes::None, false, te->id});
+			char k = bw_research_key(te->id);
+			if (k) for (auto& c : card) if (c.key == k) { k = 0; break; }
+			card.push_back({k ? k : pick_key(nm), nm, C_RESEARCH, UnitTypes::None, false, te->id});
 		}
 	}
 
