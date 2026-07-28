@@ -445,9 +445,14 @@ struct play_ui : ui_functions {
 				if (u && u->owner == my_player) own.push_back(u);
 			}
 			if (!own.empty()) {
-				if (own.size() != current_selection.size()) {
+				// A selection can't mix units with buildings or hold more than one
+				// building: keep the non-buildings, or a single building if that's all.
+				a_vector<unit_t*> keep;
+				for (unit_t* u : own) if (!ut_building(u)) keep.push_back(u);
+				if (keep.empty()) keep.push_back(own.front());
+				if (keep.size() != current_selection.size()) {
 					current_selection_clear();
-					for (unit_t* u : own) current_selection_add(u);
+					for (unit_t* u : keep) current_selection_add(u);
 				}
 			} else if (current_selection.size() > 1) {
 				unit_t* first = nullptr;
@@ -699,10 +704,12 @@ struct play_ui : ui_functions {
 		for (size_t i = 0; i != game_st.unit_types.vec.size(); ++i) {
 			const unit_type_t* t = get_unit_type((UnitTypes)i);
 			if (!unit_can_build(u, t)) continue;
-			bool tb = ut_building(t);
-			if (buildings_only != tb) continue;
+			bool tb = ut_building(t), addon = ut_addon(t);
+			// Producer cards list units plus their addons (addons are buildings, but the
+			// producer builds them, not a worker); the worker submenu lists real buildings.
+			if (buildings_only ? (!tb || addon) : (tb && !addon)) continue;
 			if (cat && tb && bw_build_advanced((UnitTypes)i) != (cat == 2)) continue;
-			cmd_act act = worker ? C_BUILD : building ? (tb ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
+			cmd_act act = worker ? C_BUILD : building ? (tb && !addon ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
 			const char* nm = unit_name((UnitTypes)i);
 			// Canonical BW key when it's free on this card; otherwise auto-assign.
 			char k = tb ? bw_build_key((UnitTypes)i) : bw_train_key((UnitTypes)i);

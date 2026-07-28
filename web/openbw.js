@@ -846,7 +846,13 @@ async function boot(session) {
     pauseBtn.title = paused ? 'Resume' : 'Pause';
     updateBanner();
   };
-  pauseBtn.onclick = () => { paused = !paused; applyPause(); };
+  pauseBtn.onclick = () => {
+    paused = !paused;
+    // On resume, forget the wall-clock debt from the pause so the step loop doesn't
+    // fast-forward to "catch up", and drop anything queued while paused.
+    if (!paused) { stepClock = performance.now(); x.openbw_out_clear(); }
+    applyPause();
+  };
   applyPause();
 
   // Game speed lives in the settings popup; the value is the ms per sim frame.
@@ -1067,6 +1073,9 @@ async function boot(session) {
 
   function frame() {
     x.openbw_render(performance.now());
+    // Paused: render + input still run, but drop any commands they produced so nothing
+    // is queued up to fire on resume.
+    if (paused) x.openbw_out_clear();
     const w = x.openbw_framebuffer_width(), h = x.openbw_framebuffer_height(), ptr = x.openbw_framebuffer();
     if (w && h && ptr) {
       if (w !== iw || h !== ih) { iw = w; ih = h; canvas.width = w; canvas.height = h; image = ctx.createImageData(w, h); }
