@@ -946,6 +946,12 @@ struct play_ui : ui_functions {
 			stat2 = format("Shields %d/%d", sel->shield_points.integer_part(), sel->unit_type->shield_points);
 		else if (ut_resource(sel))
 			stat2 = format("%s %d", unit_is_mineral_field(sel) ? "Minerals" : "Gas", sel->building.resource.resource_count);
+		// Energy for casters and energy buildings (Comsat, Nuclear Silo…); shown alongside
+		// shields for the Protoss casters that have both.
+		if (ut_has_energy(sel) && !u_hallucination(sel)) {
+			if (!stat2.empty()) stat2 += " \xc2\xb7 ";   // " · "
+			stat2 += format("Energy %d/%d", sel->energy.integer_part(), unit_max_energy(sel).integer_part()).c_str();
+		}
 		card_text += title;
 		card_text += '\t'; card_text += format("HP %d/%d", hp, maxhp).c_str();
 		card_text += '\t'; card_text += stat2.c_str();
