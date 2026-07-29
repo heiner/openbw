@@ -944,9 +944,11 @@ async function boot(session) {
   };
 
   // Clicking a card button does the same as pressing its key (shift-click queues).
+  // Grayed buttons still dispatch — the sim decides (a spell blocked on energy raises the
+  // "Not enough energy" toast; other unavailable commands are simply consumed).
   cardEl.addEventListener('click', (e) => {
     const cmd = e.target.closest('.cmd');
-    if (!cmd || cmd.classList.contains('off')) return;
+    if (!cmd) return;
     const key = cmd.dataset.key;
     if (!key) return;
     x.openbw_key(e.shiftKey ? 1 : 0, 0, 225);   // reflect shift for queuing
