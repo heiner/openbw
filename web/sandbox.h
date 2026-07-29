@@ -836,6 +836,100 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	// One-line effect blurbs for the command-card hover, in BW's own terms.
+	static const char* bw_upgrade_desc(UpgradeTypes id) {
+		using U = UpgradeTypes;
+		switch (id) {
+		case U::Terran_Infantry_Weapons: return "+1 infantry damage";
+		case U::Terran_Vehicle_Weapons:  return "+1 vehicle damage";
+		case U::Terran_Ship_Weapons:     return "+1 ship damage";
+		case U::Terran_Infantry_Armor:   return "+1 infantry armor";
+		case U::Terran_Vehicle_Plating:  return "+1 vehicle armor";
+		case U::Terran_Ship_Plating:     return "+1 ship armor";
+		case U::U_238_Shells:            return "+1 Marine range";
+		case U::Ion_Thrusters:           return "Faster Vultures";
+		case U::Caduceus_Reactor:        return "+50 Medic energy";
+		case U::Charon_Boosters:         return "+3 Goliath air range";
+		case U::Titan_Reactor:           return "+50 Science Vessel energy";
+		case U::Ocular_Implants:         return "+2 Ghost sight";
+		case U::Moebius_Reactor:         return "+50 Ghost energy";
+		case U::Apollo_Reactor:          return "+50 Wraith energy";
+		case U::Colossus_Reactor:        return "+50 Battlecruiser energy";
+		case U::Zerg_Melee_Attacks:      return "+1 melee damage";
+		case U::Zerg_Missile_Attacks:    return "+1 ranged damage";
+		case U::Zerg_Flyer_Attacks:      return "+1 air damage";
+		case U::Zerg_Carapace:           return "+1 ground armor";
+		case U::Zerg_Flyer_Carapace:     return "+1 air armor";
+		case U::Ventral_Sacs:            return "Overlords carry units";
+		case U::Antennae:                return "+2 Overlord sight";
+		case U::Pneumatized_Carapace:    return "Faster Overlords";
+		case U::Metabolic_Boost:         return "Faster Zerglings";
+		case U::Adrenal_Glands:          return "Faster Zergling attack";
+		case U::Muscular_Augments:       return "Faster Hydralisks";
+		case U::Grooved_Spines:          return "+1 Hydralisk range";
+		case U::Gamete_Meiosis:          return "+50 Queen energy";
+		case U::Metasynaptic_Node:       return "+50 Defiler energy";
+		case U::Chitinous_Plating:       return "+2 Ultralisk armor";
+		case U::Anabolic_Synthesis:      return "Faster Ultralisks";
+		case U::Protoss_Ground_Weapons:  return "+1 ground damage";
+		case U::Protoss_Air_Weapons:     return "+1 air damage";
+		case U::Protoss_Ground_Armor:    return "+1 ground armor";
+		case U::Protoss_Air_Armor:       return "+1 air armor";
+		case U::Protoss_Plasma_Shields:  return "+1 shields";
+		case U::Singularity_Charge:      return "+2 Dragoon range";
+		case U::Leg_Enhancements:        return "Faster Zealots";
+		case U::Scarab_Damage:           return "+ Scarab damage";
+		case U::Reaver_Capacity:         return "Reaver holds 10 Scarabs";
+		case U::Gravitic_Drive:          return "Faster Shuttles";
+		case U::Sensor_Array:            return "+2 Observer sight";
+		case U::Gravitic_Boosters:       return "Faster Observers";
+		case U::Khaydarin_Amulet:        return "+50 High Templar energy";
+		case U::Apial_Sensors:           return "+2 Scout sight";
+		case U::Gravitic_Thrusters:      return "Faster Scouts";
+		case U::Carrier_Capacity:        return "Carrier holds 8 Interceptors";
+		case U::Khaydarin_Core:          return "+50 Arbiter energy";
+		case U::Argus_Jewel:             return "+50 Corsair energy";
+		case U::Argus_Talisman:          return "+50 Dark Archon energy";
+		default: return "";
+		}
+	}
+	static const char* bw_tech_desc(TechTypes id) {
+		using T = TechTypes;
+		switch (id) {
+		case T::Stim_Packs:         return "+speed & attack, costs HP";
+		case T::Lockdown:           return "Freezes a mechanical unit";
+		case T::EMP_Shockwave:      return "Drains energy & shields";
+		case T::Spider_Mines:       return "Vultures lay mines";
+		case T::Scanner_Sweep:      return "Reveals an area";
+		case T::Tank_Siege_Mode:    return "Siege mode: long range";
+		case T::Defensive_Matrix:   return "Absorbs 250 damage";
+		case T::Irradiate:          return "Damages biological units";
+		case T::Yamato_Gun:         return "Heavy single-target blast";
+		case T::Cloaking_Field:     return "Wraith cloak";
+		case T::Personnel_Cloaking: return "Ghost cloak";
+		case T::Restoration:        return "Removes status effects";
+		case T::Optical_Flare:      return "Blinds a unit";
+		case T::Burrowing:          return "Ground units can burrow";
+		case T::Lurker_Aspect:      return "Morph Hydralisk to Lurker";
+		case T::Spawn_Broodlings:   return "Kills a unit, spawns broodlings";
+		case T::Plague:             return "Area damage over time";
+		case T::Consume:            return "Eat a unit for energy";
+		case T::Ensnare:            return "Slows units in an area";
+		case T::Parasite:           return "See through a unit";
+		case T::Dark_Swarm:         return "Blocks ranged attacks";
+		case T::Infestation:        return "Infest a damaged Terran CC";
+		case T::Psionic_Storm:      return "Area damage";
+		case T::Hallucination:      return "Illusory copies of a unit";
+		case T::Recall:             return "Teleport units to the Arbiter";
+		case T::Stasis_Field:       return "Freezes units in an area";
+		case T::Disruption_Web:     return "Blocks ground attacks";
+		case T::Mind_Control:       return "Take control of a unit";
+		case T::Feedback:           return "Burns energy as damage";
+		case T::Maelstrom:          return "Stuns biological units";
+		default: return "";
+		}
+	}
+
 	// First prerequisite the owner hasn't completed yet (for the "Requires X" hint).
 	UnitTypes first_missing_req(UnitTypes id, int owner) {
 		UnitTypes r[2]; bw_requires(id, r);
@@ -1089,7 +1183,9 @@ struct play_ui : ui_functions {
 				minc = ut->mineral_cost; gasc = ut->gas_cost;
 			}
 			bool afford = (int)st.current_minerals[my_player] >= minc && (int)st.current_gas[my_player] >= gasc;
-			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable \t requires
+			const char* desc = c.act == C_UPGRADE ? bw_upgrade_desc(c.upg)
+			                 : (c.act == C_RESEARCH || c.act == C_SPELL) ? bw_tech_desc(c.tech) : "";
+			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable \t requires \t desc
 			card_text += '\n'; card_text += c.key; card_text += '\t'; card_text += c.label;
 			card_text += '\t'; card_text += (c.enabled ? '1' : '0');
 			card_text += '\t'; card_text += format("%d", icon).c_str();
@@ -1097,6 +1193,7 @@ struct play_ui : ui_functions {
 			card_text += '\t'; card_text += format("%d", gasc).c_str();
 			card_text += '\t'; card_text += (afford ? '1' : '0');
 			card_text += '\t'; card_text += (c.req != UnitTypes::None) ? unit_name(c.req) : "";
+			card_text += '\t'; card_text += desc;
 		}
 	}
 

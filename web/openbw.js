@@ -972,13 +972,18 @@ async function boot(session) {
       // fronting each amount with the same delivery sprite used in the resource HUD.
       const mIco = ri[0] ? `<img class="cico" src="${ri[0]}">` : '';
       const gIco = ri[1] ? `<img class="cico" src="${ri[1]}">` : '';
-      const cost = (minC || gasC)
-        ? `<span class="cost"><b class="m">${mIco}${minC}</b>${gasC ? ` <b class="g">${gIco}${gasC}</b>` : ''}</span>`
+      const esc = (s) => s.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      // Popup on hover: what it does (for upgrades/research/abilities) above the cost; a grayed
+      // build instead shows the prerequisite it's waiting on.
+      const desc = f.length > 8 ? f[8] : '';
+      const costInner = (minC || gasC)
+        ? `<b class="m">${mIco}${minC}</b>${gasC ? ` <b class="g">${gIco}${gasC}</b>` : ''}`
         : '';
-      // A grayed build shows the prerequisite it's waiting on instead of its cost.
+      const cost = (desc || costInner)
+        ? `<span class="cost">${desc ? `<div class="d">${esc(desc)}</div>` : ''}${costInner ? `<div>${costInner}</div>` : ''}</span>`
+        : '';
       const req = f.length > 7 ? f[7] : '';
-      const reqEsc = req.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
-      const popup = off && req ? `<span class="req">Requires ${reqEsc}</span>` : cost;
+      const popup = off && req ? `<span class="req">Requires ${esc(req)}</span>` : cost;
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
       html += `<span class="cmd${off}${poor}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
