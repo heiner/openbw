@@ -229,6 +229,9 @@ OPENBW_EXPORT(openbw_edge) int openbw_edge() { return g_ui ? g_ui->edge_dir : 0;
 // Last blocked-command reason as "seq\tmessage" — the host shows a toast when seq changes.
 OPENBW_EXPORT(openbw_error) const char* openbw_error() { return g_ui ? g_ui->error_status() : ""; }
 
+// System message log (eliminations…), newline-separated. Empty when there's nothing to show.
+OPENBW_EXPORT(openbw_messages) const char* openbw_messages() { return g_ui ? g_ui->game_messages() : ""; }
+
 // Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
 OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }
 

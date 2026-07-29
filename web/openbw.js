@@ -1061,6 +1061,25 @@ async function boot(session) {
     toastTimer = setTimeout(() => toastEl.classList.remove('show'), 2200);
   };
 
+  // System message log (eliminations…): openbw_messages() is a newline-separated list the
+  // sim ages out, so re-render only when it changes. textContent keeps it injection-safe.
+  const msgEl = $('messages');
+  let lastMsgText = null;
+  const updateMessages = () => {
+    const ptr = x.openbw_messages();
+    const text = ptr ? readCString(ptr) : '';
+    if (text === lastMsgText) return;
+    lastMsgText = text;
+    msgEl.textContent = '';
+    if (!text) return;
+    for (const line of text.split('\n')) {
+      const d = document.createElement('div');
+      d.className = 'msg';
+      d.textContent = line;
+      msgEl.appendChild(d);
+    }
+  };
+
   let iw = 0, ih = 0, image = null;
   // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
   // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
@@ -1090,6 +1109,7 @@ async function boot(session) {
     updateStatus();
     updateResources();
     updateError();
+    updateMessages();
     updateCursor();
     requestAnimationFrame(frame);
   }

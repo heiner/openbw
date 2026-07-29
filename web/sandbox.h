@@ -309,6 +309,13 @@ struct play_ui : ui_functions {
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
 	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
+	// System message log (eliminations, later chat), shown as fading lines top-left.
+	struct log_msg { a_string text; int age; };
+	a_vector<log_msg> msg_log;
+	a_string msg_out;                             // rebuilt for openbw_messages()
+	static const int MSG_TTL = 480;               // ticks a message stays before fading out
+	a_vector<uint8_t> player_had_units = a_vector<uint8_t>(8);   // slot ever had a unit
+	a_vector<uint8_t> player_eliminated = a_vector<uint8_t>(8);  // already announced dead
 	int outcome = 0;                              // 0 undecided, 1 victory, 2 defeat
 	bool competitive = false;                     // true only with an opponent (multiplayer)
 
@@ -1218,6 +1225,37 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	static const char* color_name(int c) {
+		static const char* n[] = {"Red", "Blue", "Teal", "Purple", "Orange", "Brown", "White", "Yellow"};
+		return (c >= 0 && c < 8) ? n[c] : "Player";
+	}
+
+	void post_message(a_string text) {
+		if (msg_log.size() > 6) msg_log.erase(msg_log.begin());
+		msg_log.push_back({std::move(text), 0});
+	}
+
+	// Newline-joined active messages for the host overlay (fades them itself).
+	const char* game_messages() {
+		msg_out.clear();
+		for (auto& m : msg_log) { if (!msg_out.empty()) msg_out += '\n'; msg_out += m.text; }
+		return msg_out.c_str();
+	}
+
+	// Announce a participant the moment it loses its last unit/building.
+	void poll_eliminations() {
+		for (int i = 0; i != 8; ++i) {
+			if (!st.players[i].initially_active) continue;
+			bool alive = false;
+			for (unit_t* u : ptr(st.player_units[i])) { (void)u; alive = true; break; }
+			if (alive) player_had_units[i] = 1;
+			else if (player_had_units[i] && !player_eliminated[i]) {
+				player_eliminated[i] = 1;
+				post_message(format("%s has been eliminated.", color_name(st.players[i].color)));
+			}
+		}
+	}
+
 	// Once per frame: fire unit-ready voices on completion and raise under-attack alerts
 	// when an own unit loses life. The first pass seeds silently so startup units are quiet.
 	void poll_events() {
@@ -1227,6 +1265,8 @@ struct play_ui : ui_functions {
 			if (--alerts[i].ttl <= 0) { alerts[i] = alerts.back(); alerts.pop_back(); }
 			else ++i;
 		}
+		for (auto& m : msg_log) ++m.age;
+		while (!msg_log.empty() && msg_log.front().age > MSG_TTL) msg_log.erase(msg_log.begin());
 		if (under_attack_sound == -2) resolve_alert_sound();
 		bool seeding = !events_seeded;
 		for (unit_t* u : ptr(st.player_units[my_player])) {
@@ -1240,6 +1280,7 @@ struct play_ui : ui_functions {
 		}
 		events_seeded = true;
 		check_last_standing();
+		poll_eliminations();
 	}
 
 	// Is there a unit under the current cursor position?

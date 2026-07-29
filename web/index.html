@@ -186,6 +186,12 @@
     font: 600 14px system-ui, sans-serif; box-shadow: 0 8px 24px rgba(0,0,0,.5);
     opacity: 0; pointer-events: none; transition: opacity .18s, transform .18s; }
   #toast.show { opacity: 1; transform: translate(-50%, 0); }
+  /* System message log (eliminations…), upper-left below the toolbar. */
+  #messages { position: fixed; top: 44px; left: 12px; z-index: 6; display: flex;
+    flex-direction: column; gap: 2px; pointer-events: none;
+    font: 600 13px system-ui, sans-serif; color: #f1f5f9; text-shadow: 0 1px 3px #000; }
+  #messages .msg { animation: msgin .2s ease-out; }
+  @keyframes msgin { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; } }
   /* End-of-game score screen. */
   #gameover { position: fixed; inset: 0; z-index: 12; display: none; place-items: center;
     background: rgba(3,6,12,.82); backdrop-filter: blur(2px); }
@@ -263,6 +269,7 @@
 </div>
 <div id="hud"><div id="status"></div><div id="card"></div></div>
 <div id="toast"></div>
+<div id="messages"></div>
 <div id="paused"><span>Paused</span></div>
 <button id="dropbtn">Drop opponent</button>
 <div id="gameover">
