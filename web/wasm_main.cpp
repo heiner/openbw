@@ -264,6 +264,12 @@ OPENBW_EXPORT(openbw_in_ptr) uint8_t* openbw_in_ptr(int len) {
 	g_inbuf.resize((size_t)len);
 	return g_inbuf.empty() ? nullptr : g_inbuf.data();
 }
+
+// Post a chat/system line (bytes in the openbw_in_ptr scratch buffer) to the message log.
+OPENBW_EXPORT(openbw_post_message) void openbw_post_message(int len) {
+	if (g_ui && len > 0 && (size_t)len <= g_inbuf.size())
+		g_ui->post_message(a_string((const char*)g_inbuf.data(), (size_t)len));
+}
 // Apply `len` bytes of framed commands as `owner`. Must be called on every peer for every
 // player, in the same order, on the same frame.
 OPENBW_EXPORT(openbw_apply) void openbw_apply(int owner, int len) {

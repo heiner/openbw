@@ -276,6 +276,7 @@ function wireInput(canvas, x) {
   // engine can track held state (for select-all, shift-queue, group assign).
   const MOD_SC = new Set([224, 225, 228, 229]);
   const key = (down) => (e) => {
+    if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat
     const sc = SCANCODE[e.code] || 0;
     const sym = e.key.length === 1 ? e.key.toLowerCase().charCodeAt(0) : 0;
     if (!sc && !sym) return;
@@ -639,6 +640,43 @@ async function boot(session) {
     debugResourcesPending = true;   // start rich; applied after the first step sets the melee start
   }
 
+  // Chat (Enter to open). Messages go into the same log the sim uses for eliminations, via
+  // openbw_post_message. In a 1v1 they're relayed to the peer over the control channel; in
+  // single-player debug the input doubles as a cheat console.
+  const isDebug = /(\?|&)debug\b/.test(location.search);
+  const chatInput = $('chatinput');
+  const postLog = (text) => {
+    const bytes = new TextEncoder().encode(text);
+    const p = x.openbw_in_ptr(bytes.length);
+    new Uint8Array(memory.buffer, p, bytes.length).set(bytes);
+    x.openbw_post_message(bytes.length);
+  };
+  const CHEATS = {
+    'show me the money':     () => (x.openbw_debug_resources(10000, 10000), 'resources granted'),
+    'black sheep wall':      () => (x.openbw_reveal_map(), 'map revealed'),
+    'there is no cow level': () => (x.openbw_debug_outcome(1), 'victory'),
+    'game over man':         () => (x.openbw_debug_outcome(2), 'defeat'),
+  };
+  const sendChat = (raw) => {
+    const text = raw.trim();
+    if (!text) return;
+    if (!link && isDebug) {
+      const cheat = CHEATS[text.toLowerCase()];
+      if (cheat) { postLog('Cheat: ' + cheat()); return; }
+    }
+    if (link) link.sendControl({ t: 'chat', text });
+    postLog('You: ' + text);
+  };
+  const closeChat = () => { chatInput.value = ''; chatInput.blur(); chatInput.style.display = 'none'; };
+  window.addEventListener('keydown', (e) => {
+    if (document.activeElement === chatInput) {
+      if (e.key === 'Enter') { sendChat(chatInput.value); closeChat(); e.preventDefault(); }
+      else if (e.key === 'Escape') { closeChat(); e.preventDefault(); }
+      return;
+    }
+    if (e.key === 'Enter') { chatInput.style.display = 'block'; chatInput.focus(); e.preventDefault(); }
+  });
+
   // Resign: one confirming click (no blocking dialog), then concede via the sim.
   const resignBtn = $('opt-resign');
   let resignArmed = false;
@@ -729,6 +767,7 @@ async function boot(session) {
     // Periodic desync probe: both peers hash their sim at the same frames and compare.
     link.onControl = (msg) => {
       if (msg.t === 'kick') { endMp(`Disconnected — ${msg.why || 'kicked'}`); return; }
+      if (msg.t === 'chat') { postLog('Opponent: ' + String(msg.text || '').slice(0, 80)); return; }
       if (msg.t !== 'sum') return;
       const mine = mySums.get(msg.f);
       if (mine === undefined) { peerSums.set(msg.f, msg.h); return; }
