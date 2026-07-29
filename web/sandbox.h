@@ -301,11 +301,11 @@ struct play_ui : ui_functions {
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
 	int alert_color = -1;                         // minimap flash palette index (lazy)
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
-	int alert_ping_cooldown = 0;                  // update-ticks until a new minimap ping
 	int event_tick = 0;                           // local tick for the flash blink phase
 	static const int ALERT_TTL = 90;              // 3 sweeps of the 30-tick ping cycle
 	struct alert_t { xy pos; int ttl; };
 	a_vector<alert_t> alerts;                     // active minimap flash markers
+	xy last_event_pos; bool have_last_event = false;   // Space recenters here
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
 	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
@@ -354,13 +354,16 @@ struct play_ui : ui_functions {
 		last_recalled_group = -1;   // next tap of n selects, not centers
 	}
 
+	// Put the camera's centre on a map position (clamped to the map by ui.update()).
+	void center_on(xy pos) { screen_pos = xy(pos.x - view_width / 2, pos.y - view_height / 2); }
+
 	void center_on_selection() {
 		long sx = 0, sy = 0; int n = 0;
 		for (auto uid : current_selection) {
 			unit_t* u = get_unit(uid);
 			if (u) { sx += u->sprite->position.x; sy += u->sprite->position.y; ++n; }
 		}
-		if (n) screen_pos = xy((int)(sx / n) - view_width / 2, (int)(sy / n) - view_height / 2);
+		if (n) center_on(xy((int)(sx / n), (int)(sy / n)));
 	}
 
 	void recall_group(int n) {
@@ -1193,21 +1196,16 @@ struct play_ui : ui_functions {
 		}
 	}
 	void add_alert(xy pos) {
-		// A ping runs a fixed number of sweeps and then stops. Refreshing it on every
-		// damage tick (as this used to) meant a sustained fight left the minimap pinging
-		// forever, so an existing nearby ping is left alone to expire and a new one is
-		// rate-limited.
-		if (alert_ping_cooldown == 0) {
-			bool near = false;
-			for (auto& a : alerts) {
-				int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
-				if (dx * dx + dy * dy < 256 * 256) { near = true; break; }   // ~8 tiles
-			}
-			if (!near && alerts.size() < 8) {
-				alerts.push_back({pos, ALERT_TTL});
-				alert_ping_cooldown = 600;   // ~10 s at 60 fps
-			}
+		have_last_event = true; last_event_pos = pos;   // Space recenters on the latest hit
+		// Dedup by location, not globally: an existing nearby ping is left to expire rather
+		// than refreshed (so a sustained fight doesn't ping forever), but a hit in a new area
+		// always pings — a single global cooldown used to swallow those and drop alerts.
+		bool near = false;
+		for (auto& a : alerts) {
+			int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
+			if (dx * dx + dy * dy < 256 * 256) { near = true; break; }   // ~8 tiles
 		}
+		if (!near && alerts.size() < 8) alerts.push_back({pos, ALERT_TTL});
 		// Voice: quiet while the fight is already on screen (as the original is), and a
 		// long gap between announcements.
 		bool on_screen = pos.x >= screen_pos.x && pos.y >= screen_pos.y &&
@@ -1225,7 +1223,6 @@ struct play_ui : ui_functions {
 	void poll_events() {
 		++event_tick;
 		if (alert_cooldown > 0) --alert_cooldown;
-		if (alert_ping_cooldown > 0) --alert_ping_cooldown;
 		for (size_t i = 0; i != alerts.size();) {
 			if (--alerts[i].ttl <= 0) { alerts[i] = alerts.back(); alerts.pop_back(); }
 			else ++i;
@@ -1874,6 +1871,10 @@ struct play_ui : ui_functions {
 		}
 		if (e.type == ev::type_key_down && e.scancode == 41) {   // Escape: back out of any pending mode / submenu
 			clear_pending(); targeting = false; menu = 0; refresh_card();
+			return true;
+		}
+		if (e.type == ev::type_key_down && e.scancode == 44) {   // Space: jump to the most recent alert
+			if (have_last_event) center_on(last_event_pos);
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.sym >= '0' && e.sym <= '9') {
