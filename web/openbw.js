@@ -936,9 +936,13 @@ async function boot(session) {
       const cost = (minC || gasC)
         ? `<span class="cost"><b class="m">${mIco}${minC}</b>${gasC ? ` <b class="g">${gIco}${gasC}</b>` : ''}</span>`
         : '';
+      // A grayed build shows the prerequisite it's waiting on instead of its cost.
+      const req = f.length > 7 ? f[7] : '';
+      const reqEsc = req.replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      const popup = off && req ? `<span class="req">Requires ${reqEsc}</span>` : cost;
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
-      html += `<span class="cmd${off}${poor}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${cost}</span>`;
+      html += `<span class="cmd${off}${poor}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
     }
     cardEl.innerHTML = html;
   };

@@ -284,7 +284,8 @@ struct play_ui : ui_functions {
 	               C_CANCEL };                // cancel a morph / addon / nuke (opcode in cmd.unit)
 	struct cmd_t { char key; const char* label; cmd_act act; UnitTypes ut; bool enabled = false;
 	               TechTypes tech = TechTypes::None; UpgradeTypes upg = UpgradeTypes::None;
-	               uint16_t unit = 0; };   // target unit id (C_UNLOAD)
+	               uint16_t unit = 0;          // target unit id (C_UNLOAD)
+	               UnitTypes req = UnitTypes::None; };   // grayed: the missing prerequisite to show
 	a_vector<cmd_t> card;
 	a_string card_text;                           // "title\nKEY\tLabel\tEN\n…" for the JS overlay
 	a_string status_text;                         // producer queue + progress, rebuilt per frame
@@ -773,24 +774,107 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	// The prerequisite building(s) for a unit/building/addon, from BWAPI's requiredUnits
+	// (bwapi/BWAPILIB/Source/UnitType.cpp). out[0]/out[1] are UnitTypes::None when absent.
+	static void bw_requires(UnitTypes id, UnitTypes out[2]) {
+		using U = UnitTypes;
+		out[0] = U::None; out[1] = U::None;
+		switch (id) {
+		case U::Terran_Barracks:          out[0] = U::Terran_Command_Center; break;
+		case U::Terran_Academy:           out[0] = U::Terran_Barracks; break;
+		case U::Terran_Factory:           out[0] = U::Terran_Barracks; break;
+		case U::Terran_Starport:          out[0] = U::Terran_Factory; break;
+		case U::Terran_Science_Facility:  out[0] = U::Terran_Starport; break;
+		case U::Terran_Engineering_Bay:   out[0] = U::Terran_Command_Center; break;
+		case U::Terran_Armory:            out[0] = U::Terran_Factory; break;
+		case U::Terran_Missile_Turret:    out[0] = U::Terran_Engineering_Bay; break;
+		case U::Terran_Bunker:            out[0] = U::Terran_Barracks; break;
+		case U::Terran_Comsat_Station:    out[0] = U::Terran_Academy; break;
+		case U::Terran_Nuclear_Silo:      out[0] = U::Terran_Covert_Ops; break;
+		case U::Zerg_Spawning_Pool:       out[0] = U::Zerg_Hatchery; break;
+		case U::Zerg_Evolution_Chamber:   out[0] = U::Zerg_Hatchery; break;
+		case U::Zerg_Hydralisk_Den:       out[0] = U::Zerg_Spawning_Pool; break;
+		case U::Zerg_Spire:               out[0] = U::Zerg_Lair; break;
+		case U::Zerg_Queens_Nest:         out[0] = U::Zerg_Lair; break;
+		case U::Zerg_Nydus_Canal:         out[0] = U::Zerg_Hive; break;
+		case U::Zerg_Ultralisk_Cavern:    out[0] = U::Zerg_Hive; break;
+		case U::Zerg_Defiler_Mound:       out[0] = U::Zerg_Hive; break;
+		case U::Protoss_Gateway:          out[0] = U::Protoss_Nexus; break;
+		case U::Protoss_Forge:            out[0] = U::Protoss_Nexus; break;
+		case U::Protoss_Cybernetics_Core: out[0] = U::Protoss_Gateway; break;
+		case U::Protoss_Photon_Cannon:    out[0] = U::Protoss_Forge; break;
+		case U::Protoss_Shield_Battery:   out[0] = U::Protoss_Gateway; break;
+		case U::Protoss_Citadel_of_Adun:  out[0] = U::Protoss_Cybernetics_Core; break;
+		case U::Protoss_Templar_Archives: out[0] = U::Protoss_Citadel_of_Adun; break;
+		case U::Protoss_Robotics_Facility:out[0] = U::Protoss_Cybernetics_Core; break;
+		case U::Protoss_Observatory:      out[0] = U::Protoss_Robotics_Facility; break;
+		case U::Protoss_Robotics_Support_Bay: out[0] = U::Protoss_Robotics_Facility; break;
+		case U::Protoss_Stargate:         out[0] = U::Protoss_Cybernetics_Core; break;
+		case U::Protoss_Fleet_Beacon:     out[0] = U::Protoss_Stargate; break;
+		case U::Protoss_Arbiter_Tribunal: out[0] = U::Protoss_Templar_Archives; out[1] = U::Protoss_Stargate; break;
+		default: break;
+		}
+	}
+
+	// Zerg buildings that morph from another building (not worker-built), so they don't
+	// belong in the worker's build menu.
+	static bool bw_is_building_morph(UnitTypes id) {
+		using U = UnitTypes;
+		return id == U::Zerg_Lair || id == U::Zerg_Hive || id == U::Zerg_Greater_Spire ||
+		       id == U::Zerg_Sunken_Colony || id == U::Zerg_Spore_Colony;
+	}
+
+	// The building an addon attaches to (BWAPI whatBuilds); None if not an addon.
+	static UnitTypes bw_addon_parent(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		case U::Terran_Comsat_Station: case U::Terran_Nuclear_Silo: return U::Terran_Command_Center;
+		case U::Terran_Machine_Shop:   return U::Terran_Factory;
+		case U::Terran_Control_Tower:  return U::Terran_Starport;
+		case U::Terran_Covert_Ops: case U::Terran_Physics_Lab: return U::Terran_Science_Facility;
+		default: return U::None;
+		}
+	}
+
+	// First prerequisite the owner hasn't completed yet (for the "Requires X" hint).
+	UnitTypes first_missing_req(UnitTypes id, int owner) {
+		UnitTypes r[2]; bw_requires(id, r);
+		for (UnitTypes x : r)
+			if (x != UnitTypes::None && !player_has_completed_unit(owner, x)) return x;
+		return UnitTypes::None;
+	}
+
 	// cat: 0 = no menu filter (a producer's own list); 1 = worker Basic build; 2 = Advanced.
 	void add_producible(unit_t* u, bool buildings_only, int cat = 0) {
 		bool worker = ut_worker(u), building = ut_building(u);
+		race_t race = unit_race(u);
 		for (size_t i = 0; i != game_st.unit_types.vec.size(); ++i) {
-			const unit_type_t* t = get_unit_type((UnitTypes)i);
-			if (!unit_can_build(u, t)) continue;
+			UnitTypes id = (UnitTypes)i;
+			const unit_type_t* t = get_unit_type(id);
 			bool tb = ut_building(t), addon = ut_addon(t);
 			// Producer cards list units plus their addons (addons are buildings, but the
 			// producer builds them, not a worker); the worker submenu lists real buildings.
 			if (buildings_only ? (!tb || addon) : (tb && !addon)) continue;
-			if (cat && tb && bw_build_advanced((UnitTypes)i) != (cat == 2)) continue;
+			if (cat && tb && bw_build_advanced(id) != (cat == 2)) continue;
+			bool can = unit_can_build(u, t);
+			UnitTypes req = UnitTypes::None;
+			if (!can) {
+				// Not buildable yet: keep it, grayed with its missing prereq, but only for the
+				// building/addon lists BW always shows — an unavailable trainable unit stays off
+				// the card. bw_build_key is non-zero only for real build-menu buildings.
+				bool always = (buildings_only && bw_build_key(id) && unit_race(t) == race && !bw_is_building_morph(id))
+				           || (!buildings_only && addon && bw_addon_parent(id) == u->unit_type->id);
+				if (!always) continue;
+				req = first_missing_req(id, u->owner);
+			}
 			cmd_act act = worker ? C_BUILD : building ? (tb && !addon ? C_MORPHBLDG : C_TRAIN) : C_MORPH;
-			const char* nm = unit_name((UnitTypes)i);
+			const char* nm = unit_name(id);
 			// Canonical BW key when it's free on this card; otherwise auto-assign.
-			char k = tb ? bw_build_key((UnitTypes)i) : bw_train_key((UnitTypes)i);
+			char k = tb ? bw_build_key(id) : bw_train_key(id);
 			bool used = false;
 			if (k) for (auto& c : card) if (c.key == k) { used = true; break; }
-			card.push_back({(k && !used) ? k : pick_key(nm), nm, act, (UnitTypes)i});
+			card.push_back({(k && !used) ? k : pick_key(nm), nm, act, id, can,
+			                TechTypes::None, UpgradeTypes::None, 0, req});
 		}
 		if (buildings_only) return;
 		for (size_t i = 0; i != game_st.upgrade_types.vec.size(); ++i) {
@@ -799,7 +883,7 @@ struct play_ui : ui_functions {
 			const char* nm = upgrade_name(up);
 			char k = bw_upgrade_key(up->id);
 			if (k) for (auto& c : card) if (c.key == k) { k = 0; break; }
-			card.push_back({k ? k : pick_key(nm), nm, C_UPGRADE, UnitTypes::None, false, TechTypes::None, up->id});
+			card.push_back({k ? k : pick_key(nm), nm, C_UPGRADE, UnitTypes::None, true, TechTypes::None, up->id});
 		}
 		for (size_t i = 0; i != game_st.tech_types.vec.size(); ++i) {
 			const tech_type_t* te = get_tech_type((TechTypes)i);
@@ -807,7 +891,7 @@ struct play_ui : ui_functions {
 			const char* nm = tech_name(te);
 			char k = bw_research_key(te->id);
 			if (k) for (auto& c : card) if (c.key == k) { k = 0; break; }
-			card.push_back({k ? k : pick_key(nm), nm, C_RESEARCH, UnitTypes::None, false, te->id});
+			card.push_back({k ? k : pick_key(nm), nm, C_RESEARCH, UnitTypes::None, true, te->id});
 		}
 	}
 
@@ -939,12 +1023,15 @@ struct play_ui : ui_functions {
 		else if (u) title = card_for_unit(u, u->unit_type->id);
 		else { title = unit_name(sel->unit_type->id); menu = 0; }   // neutral/enemy: name only, no actions
 
-		// Everything enumerated is already do-able (the engine's can-build/upgrade/research
-		// checks gate it), so it's enabled; only the hardcoded abilities need a tech check.
+		// Producibles and spells set their own enabled (build/upgrade/research availability,
+		// or a spell's energy); the plain orders default to enabled; a couple of abilities
+		// need a tech check.
 		for (auto& c : card) {
 			switch (c.act) {
 			case C_STIM:  c.enabled = player_has_researched(my_player, TechTypes::Stim_Packs); break;
 			case C_SIEGE: c.enabled = player_has_researched(my_player, TechTypes::Tank_Siege_Mode); break;
+			case C_BUILD: case C_TRAIN: case C_MORPH: case C_MORPHBLDG:
+			case C_UPGRADE: case C_RESEARCH: case C_SPELL: break;   // enabled already set
 			default:      c.enabled = true;
 			}
 		}
@@ -1002,13 +1089,14 @@ struct play_ui : ui_functions {
 				minc = ut->mineral_cost; gasc = ut->gas_cost;
 			}
 			bool afford = (int)st.current_minerals[my_player] >= minc && (int)st.current_gas[my_player] >= gasc;
-			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable
+			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable \t requires
 			card_text += '\n'; card_text += c.key; card_text += '\t'; card_text += c.label;
 			card_text += '\t'; card_text += (c.enabled ? '1' : '0');
 			card_text += '\t'; card_text += format("%d", icon).c_str();
 			card_text += '\t'; card_text += format("%d", minc).c_str();
 			card_text += '\t'; card_text += format("%d", gasc).c_str();
 			card_text += '\t'; card_text += (afford ? '1' : '0');
+			card_text += '\t'; card_text += (c.req != UnitTypes::None) ? unit_name(c.req) : "";
 		}
 	}
 
