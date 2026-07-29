@@ -57,4 +57,9 @@ LIBOBJS=$(find "$BUILD" -name '*.obj')
   "$OBJ/ZZZKBotAIModule.o" "$OBJ/dlstub.o" $LIBOBJS \
   -o "$OUT"
 echo "==> built $OUT ($(ls -la "$OUT" | awk '{print $5}') bytes)"
-"$WSDK/bin/wasm-objdump" -x "$OUT" 2>/dev/null | grep -iE "openbw_bot_(attach|tick|out|supply)" | head
+# Best-effort sanity print of the bot exports. wasm-objdump is a WABT tool the WASI
+# SDK doesn't bundle, so skip it when absent and never let this diagnostic (under
+# `set -e -o pipefail`) fail a build that already succeeded above.
+if [ -x "$WSDK/bin/wasm-objdump" ]; then
+  "$WSDK/bin/wasm-objdump" -x "$OUT" 2>/dev/null | grep -iE "openbw_bot_(attach|tick|out|supply)" | head || true
+fi
