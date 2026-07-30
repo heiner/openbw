@@ -1427,6 +1427,25 @@ struct play_ui : ui_functions {
 		return msg_out.c_str();
 	}
 
+	// Read-only state dump of the primary selected unit, for debugging from the JS console
+	// (window.__bw.x.openbw_debug_dump). One `key=value` per line.
+	a_string debug_text;
+	const char* debug_dump() {
+		debug_text.clear();
+		debug_text += format("selection=%d\n", (int)current_selection.size());
+		unit_t* u = primary_selected();
+		if (!u) { debug_text += "primary=none\n"; return debug_text.c_str(); }
+		debug_text += format("unit=%s owner=%d\n", unit_name(u->unit_type->id), u->owner);
+		debug_text += format("order=%d order2=%d\n", (int)u->order_type->id, (int)u->secondary_order_type->id);
+		debug_text += format("attack_move=%d attack_unit=%d\n",
+			(int)u->unit_type->attack_move->id, (int)u->unit_type->attack_unit->id);
+		debug_text += format("ground_weapon=%d\n", (int)u->unit_type->ground_weapon->id);
+		debug_text += format("pos=%d,%d hp=%d\n", u->sprite->position.x, u->sprite->position.y, u->hp.integer_part());
+		debug_text += format("move_target=%d,%d order_target=%d,%d\n",
+			u->move_target.pos.x, u->move_target.pos.y, u->order_target.pos.x, u->order_target.pos.y);
+		return debug_text.c_str();
+	}
+
 	// Announce a participant the moment it loses its last unit/building.
 	void poll_eliminations() {
 		for (int i = 0; i != 8; ++i) {
@@ -1587,7 +1606,10 @@ struct play_ui : ui_functions {
 		sync_selection();
 		bool q = key_shift();
 		switch (pending_targ) {
-		case T_ATTACK: cmd_order(Orders::AttackDefault, pos, target, q); break;
+		// A unit target force-attacks it (AttackDefault → the unit's attack_unit); a-move to
+		// ground uses AttackMove directly. AttackDefault + no target resolves to the unit's
+		// attack_move, which is Guard for workers (they'd stand still) — AttackMove moves them.
+		case T_ATTACK: cmd_order(target ? Orders::AttackDefault : Orders::AttackMove, pos, target, q); break;
 		case T_MOVE:   cmd_order(Orders::Move, pos, target, q); break;
 		case T_PATROL: cmd_order(Orders::Patrol, pos, nullptr, q); break;
 		case T_GATHER: cmd_default_order(pos, target, q); break;

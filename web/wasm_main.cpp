@@ -232,6 +232,9 @@ OPENBW_EXPORT(openbw_error) const char* openbw_error() { return g_ui ? g_ui->err
 // System message log (eliminations…), newline-separated. Empty when there's nothing to show.
 OPENBW_EXPORT(openbw_messages) const char* openbw_messages() { return g_ui ? g_ui->game_messages() : ""; }
 
+// Read-only debug dump of the primary selected unit (window.__bw.x.openbw_debug_dump).
+OPENBW_EXPORT(openbw_debug_dump) const char* openbw_debug_dump() { return g_ui ? g_ui->debug_dump() : ""; }
+
 // Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
 OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }
 
