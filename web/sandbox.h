@@ -487,6 +487,13 @@ struct play_ui : ui_functions {
 		last_recalled_group = -1;   // a fresh selection resets group double-tap tracking
 		unit_t* u = primary_selected();
 		if (!u) { ack_count = 0; refresh_card(); return; }
+		// Like the original: selecting a building with a rally waypoint pops the ground
+		// marker there, so you can see where its units will gather. (Same real-rally test
+		// as draw_order_lines: a set point that isn't just the building itself.)
+		if (u_grounded_building(u)) {
+			xy r = u->building.rally.pos;
+			if (r != xy() && !close_xy(r, u->sprite->position)) show_marker(r);
+		}
 		if (current_selection.size() == 1 && get_unit_id(u) == ack_unit) ++ack_count;
 		else { ack_unit = get_unit_id(u); ack_count = 0; }
 		const unit_type_t* ut = u->unit_type;
