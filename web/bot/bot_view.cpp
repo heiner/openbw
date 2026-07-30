@@ -16,7 +16,14 @@
 #include "BWAPI/GameImpl.h"
 #include "BW/BWData.h"
 #include <BWAPI.h>
-#include "ZZZKBotAIModule.h"   // swap per bot
+
+// Which bot to bolt on. The build picks it: ZZZKBot by default, or e.g.
+//   -DOPENBW_BOT_MODULE_HEADER='"Main/Header.h"' -DOPENBW_BOT_MODULE_CLASS=McRaveModule
+#ifndef OPENBW_BOT_MODULE_HEADER
+#define OPENBW_BOT_MODULE_HEADER "ZZZKBotAIModule.h"
+#define OPENBW_BOT_MODULE_CLASS  ZZZKBotAIModule
+#endif
+#include OPENBW_BOT_MODULE_HEADER
 
 #include <vector>
 #include <cstdint>
@@ -37,7 +44,7 @@ void bot_view_attach(void* state_ptr, int slot) {
   g_slot = slot;
   BW::Game game = BW::makeExternalGame(state_ptr, slot);
   g_h = new BWAPI::BroodwarImpl_handle(game);
-  (*g_h)->specifiedModule = new ZZZKBotAIModule();
+  (*g_h)->specifiedModule = new OPENBW_BOT_MODULE_CLASS();
   // Capture the bot's orders instead of feeding BWData's sync server. Frame each
   // command [u16 len][bytes] so it drops straight into apply_bw_commands.
   (*g_h)->bwgame.setCommandSink([](const uint8_t* buf, size_t n) {
