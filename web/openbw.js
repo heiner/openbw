@@ -602,6 +602,7 @@ async function boot(session) {
   const RACE_NAME = ['Zerg', 'Terran', 'Protoss'];
   const PLAYER_COLORS = ['#f40404', '#0c48cc', '#2cb494', '#88409c', '#f88c14', '#703014', '#cce0d0', '#fcfc38'];
   let gameOverShown = false;
+  const toMainMenu = () => location.replace(location.origin + location.pathname);
   const showGameOver = (title, won) => {
     if (gameOverShown) return;
     gameOverShown = true;
@@ -624,10 +625,15 @@ async function boot(session) {
     t.textContent = title;
     t.className = won === true ? 'win' : won === false ? 'lose' : '';
     $('gameover').classList.add('show');
+    // The game's decided — you can't concede one you've already won or lost, so the
+    // settings menu's "Resign" turns into "Back to main menu".
+    resignArmed = false;
+    resignBtn.textContent = 'Back to main menu';
+    resignBtn.classList.replace('danger', 'backmenu');
   };
   $('go-replay').onclick = (e) => saveReplay(e.currentTarget);
   $('go-close').onclick = () => { x.openbw_reveal_map(); $('gameover').classList.remove('show'); };
-  $('go-new').onclick = () => location.replace(location.origin + location.pathname);
+  $('go-new').onclick = toMainMenu;
 
   // Debug (?debug in the URL): force a win/lose to exercise the game-over screen without
   // playing to elimination. Bypasses the competitive gate, so it works in single-player.
@@ -681,6 +687,7 @@ async function boot(session) {
   const resignBtn = $('opt-resign');
   let resignArmed = false;
   resignBtn.onclick = () => {
+    if (gameOverShown) { settingsPop.style.display = 'none'; toMainMenu(); return; }
     if (!resignArmed) { resignArmed = true; resignBtn.textContent = 'Confirm — resign?'; return; }
     resignArmed = false; resignBtn.textContent = 'Resign game';
     settingsPop.style.display = 'none';
