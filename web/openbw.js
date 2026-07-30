@@ -51,7 +51,6 @@ function pickStartSlots(n, starts) {
   return pool.slice(0, n);
 }
 const MAP_LOCAL = MAPS[0].file;
-const BOT_RACE = 0;   // ZZZKBot plays Zerg (race_t::zerg == 0)
 const MAP_REMOTE = '';
 
 // Fetched map bytes, kept so the lobby can hash a map without re-downloading it.
@@ -530,9 +529,9 @@ async function boot(session) {
   // BUILD is replaced by CI with the commit SHA (see .github/workflows/pages.yml), so a
   // new deploy fetches a fresh wasm URL instead of a stale cached one. Locally it stays
   // the '__BUILD__' placeholder and we cache-bust per load instead.
-  // vs-Computer loads the bot-enabled module (sandbox + BWAPI server + ZZZKBot); it
-  // exports the same surface plus openbw_bot_*, so everything else is identical.
-  const wasmName = session.bot ? 'openbw-bot.wasm' : 'openbw.wasm';
+  // vs-Computer loads a bot-enabled module (sandbox + BWAPI server + the chosen bot);
+  // each exports the same surface plus openbw_bot_*, so everything else is identical.
+  const wasmName = session.bot ? session.bot.module : 'openbw.wasm';
   const wasmReq = () => DEV ? fetch('./' + wasmName + '?t=' + Date.now(), { cache: 'no-store' })
                             : fetch('./' + wasmName + '?v=' + BUILD);
   let instance;
@@ -1203,6 +1202,15 @@ if (/Mobi|Android|iPhone|iPad|iPod/i.test(navigator.userAgent) ||
   $('mobilewarn').style.display = 'block';
 
 const YOU_RACES = [[1, 'Terran'], [0, 'Zerg'], [2, 'Protoss'], [-1, 'Random']];   // value = race_t, -1 = random
+// Computer opponents: dropdown value -> which wasm module + which race it plays.
+// race_t: Zerg 0, Terran 1, Protoss 2. McRave is multi-race (one module per race).
+const OPPONENTS = {
+  zzzk:       { label: 'ZZZKBot (Zerg)',    module: 'openbw-bot.wasm',    race: 0 },
+  'mcrave-p': { label: 'McRave (Protoss)',  module: 'openbw-mcrave.wasm', race: 2 },
+  'mcrave-t': { label: 'McRave (Terran)',   module: 'openbw-mcrave.wasm', race: 1 },
+  'mcrave-z': { label: 'McRave (Zerg)',     module: 'openbw-mcrave.wasm', race: 0 },
+};
+const DEFAULT_OPP = 'mcrave-p';
 const slotsBox = $('slots');
 const curMap = () => MAPS.find((m) => m.file === mapSelect.value) || MAPS[0];
 
@@ -1211,7 +1219,7 @@ function renderMapInfo() {
   $('map-info').textContent = `${m.w}×${m.h} · ${m.tileset} · ${m.starts} players`;
 }
 function updateHint() {
-  const anyBot = slotsBox._opps.some((s) => s.value === 'bot');
+  const anyBot = slotsBox._opps.some((s) => s.value !== 'none');
   $('lobby-hint').textContent = anyBot ? '' : 'No opponent — sandbox mode (no win or loss).';
 }
 // (Re)build the You + opponent rows for the current map's start-location count.
@@ -1227,12 +1235,12 @@ function buildSlots() {
   for (let s = 1; s < m.starts; s++) {
     const lbl = document.createElement('span'); lbl.className = 'lbl'; lbl.textContent = 'Slot ' + (s + 1);
     const sel = document.createElement('select'); sel.dataset.slot = String(s);
-    sel.add(new Option('ZZZKBot (Zerg)', 'bot'));
+    for (const [val, o] of Object.entries(OPPONENTS)) sel.add(new Option(o.label, val));
     sel.add(new Option('None', 'none'));
-    sel.value = s === 1 ? 'bot' : 'none';   // default to a 1v1 vs the bot
-    // One bot for now: picking ZZZKBot here clears any other bot slot back to None.
+    sel.value = s === 1 ? DEFAULT_OPP : 'none';   // default to a 1v1 vs the bot
+    // One bot for now: picking any bot here clears any other bot slot back to None.
     sel.onchange = () => {
-      if (sel.value === 'bot') for (const o of opps) if (o !== sel && o.value === 'bot') o.value = 'none';
+      if (sel.value !== 'none') for (const o of opps) if (o !== sel && o.value !== 'none') o.value = 'none';
       updateHint();
     };
     slotsBox.append(lbl, sel);
@@ -1250,14 +1258,16 @@ $('start-game').onclick = () => {
   const file = mapSelect.value;
   const starts = (MAPS.find((m) => m.file === file) || {}).starts || 2;
   // Randomise which start location each player gets (slot = start location = colour).
-  const nBots = slotsBox._opps.filter((s) => s.value === 'bot').length;
-  const picks = pickStartSlots(1 + nBots, starts);
+  const botSel = slotsBox._opps.find((s) => s.value !== 'none');
+  const picks = pickStartSlots(botSel ? 2 : 1, starts);
   // resolveRace turns the Random sentinel (-1) into a concrete race.
   const slots = [{ slot: picks[0], race: resolveRace(+slotsBox._you.value) }];
-  let botSlot = null;
-  if (nBots) { botSlot = picks[1]; slots.push({ slot: botSlot, race: BOT_RACE }); }
   const session = { slots, mySlot: picks[0], mapFile: file };
-  if (botSlot != null) session.bot = { slot: botSlot };
+  if (botSel) {
+    const o = OPPONENTS[botSel.value];
+    slots.push({ slot: picks[1], race: o.race });
+    session.bot = { slot: picks[1], module: o.module };
+  }
   // No bot -> a single occupied slot -> the sim runs non-competitive (no auto win/lose).
   boot(session).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
 };
@@ -1273,7 +1283,8 @@ $('map-file').addEventListener('change', async (e) => {
     mapCache.set(id, bytes);   // fetchMap returns this straight from cache — no network
     const slots = [{ slot: 0, race: resolveRace(+slotsBox._you.value) }];
     const session = { slots, mySlot: 0, mapFile: id };
-    if (slotsBox._opps.some((s) => s.value === 'bot')) { slots.push({ slot: 1, race: BOT_RACE }); session.bot = { slot: 1 }; }
+    const botSel = slotsBox._opps.find((s) => s.value !== 'none');
+    if (botSel) { const o = OPPONENTS[botSel.value]; slots.push({ slot: 1, race: o.race }); session.bot = { slot: 1, module: o.module }; }
     $('controls').style.display = 'none';
     boot(session).catch((err) => { setMsg('Error: ' + err.message); console.error(err); });
   } catch (err) { setMsg('Error reading map: ' + err.message); console.error(err); }

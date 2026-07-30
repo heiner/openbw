@@ -33,18 +33,20 @@ jobs:
       - name: Build wasm
         run: bash web/build-wasm.sh
 
-      # The "vs Computer" module: the sandbox + OpenBW's BWAPI server + ZZZKBot.
-      # vendor.sh clones OpenBW/bwapi + ZZZKBot; build-web.sh drives their CMake
-      # with the WASI SDK toolchain (cmake is preinstalled on the runner).
+      # The "vs Computer" modules: the sandbox + OpenBW's BWAPI server + a bot.
+      # vendor.sh clones OpenBW/bwapi + ZZZKBot + McRave; build-web.sh drives their
+      # CMake with the WASI SDK toolchain (cmake is preinstalled on the runner).
       - name: Build vs-Computer wasm
         run: |
           bash web/bot/vendor.sh
-          bash web/bot/build-web.sh
+          bash web/bot/build-web.sh                 # ZZZKBot   -> openbw-bot.wasm
+          BOT=mcrave bash web/bot/build-web.sh       # McRave    -> openbw-mcrave.wasm
 
       - name: Assemble site
         run: |
           mkdir -p _site
-          cp web/index.html web/openbw.js web/net.js web/openbw.wasm web/openbw-bot.wasm web/CNAME _site/
+          cp web/index.html web/openbw.js web/net.js web/openbw.wasm \
+             web/openbw-bot.wasm web/openbw-mcrave.wasm web/CNAME _site/
           # A committed map (if any) ships too; otherwise the map is fetched at runtime.
           if compgen -G "web/maps/*.scx" > /dev/null; then
             mkdir -p _site/maps && cp web/maps/*.scx _site/maps/
