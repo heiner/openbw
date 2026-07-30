@@ -144,7 +144,16 @@
   #controls select { background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
     border-radius: 6px; padding: 4px 8px; font: inherit; cursor: pointer; }
   #map-info { color: #94a3b8; font-size: 13px; margin: 2px 0 10px; }
-  #slots { display: inline-grid; grid-template-columns: auto auto; gap: 6px 10px;
+  /* Map row shares the slots' 2-column grid so the dropdown lines up with You/Slot; the
+     "load map file" link hangs out to the right without shifting that alignment. */
+  #map-row { display: inline-grid; grid-template-columns: 52px 150px; gap: 6px 10px;
+    align-items: center; text-align: left; margin: 8px 0; position: relative; }
+  #map-row .lbl { color: #cbd5e1; font-size: 13px; }
+  #load-wrap { position: absolute; left: 100%; top: 50%; transform: translateY(-50%);
+    margin-left: 12px; white-space: nowrap; color: #64748b; font-size: 13px; }
+  #load-map { color: #38bdf8; cursor: pointer; }
+  #load-map:hover { text-decoration: underline; }
+  #slots { display: inline-grid; grid-template-columns: 52px 150px; gap: 6px 10px;
     align-items: center; text-align: left; margin: 0 auto 4px; }
   #slots .lbl { color: #cbd5e1; font-size: 13px; }
   #slots .you { color: #38bdf8; font-weight: 600; }
@@ -307,13 +316,16 @@
     landscape. First run downloads ~90&nbsp;MB of game data.
   </div>
   <div id="controls" style="display:none">
-    <div class="row"><label>Map <select id="map-select"></select></label></div>
+    <div id="map-row">
+      <span class="lbl">Map</span>
+      <select id="map-select"></select>
+      <span id="load-wrap">or <label id="load-map" for="map-file">load map file</label></span>
+      <input type="file" id="map-file" accept=".scx,.scm" hidden>
+    </div>
     <div id="map-info"></div>
     <div id="slots"></div>
     <div id="lobby-hint" class="hint"></div>
     <p><button id="start-game">Start Game</button></p>
-    <div class="row hint">or load a map from your computer:
-      <input type="file" id="map-file" accept=".scx,.scm"></div>
     <div id="mp">
       <h2>or play a friend (1v1)</h2>
       <div class="row" id="mp-setup">
