@@ -1102,6 +1102,26 @@ struct play_ui : ui_functions {
 		return unit_name(id);
 	}
 
+	// The command-card button that lights up for a unit's current order (its "mode"),
+	// like the original — or -1 if the order maps to no button.
+	static int order_active_act(Orders id) {
+		using O = Orders;
+		switch (id) {
+		case O::Stop: case O::Guard: case O::PlayerGuard:                      return C_STOP;
+		case O::Move: case O::Follow:                                          return C_MOVE;
+		case O::AttackDefault: case O::MoveToAttack: case O::AttackUnit:
+		case O::AttackFixedRange: case O::AttackTile: case O::AttackMove:      return C_ATTACK;
+		case O::HoldPosition: case O::QueenHoldPosition:                       return C_HOLD;
+		case O::Patrol:                                                        return C_PATROL;
+		case O::Harvest1: case O::Harvest2: case O::MoveToGas: case O::WaitForGas:
+		case O::HarvestGas: case O::MoveToMinerals: case O::WaitForMinerals:
+		case O::MiningMinerals:                                                return C_GATHER;
+		case O::ReturnGas: case O::ReturnMinerals:                             return C_RETURN;
+		case O::Repair: case O::MoveToRepair:                                  return C_REPAIR;
+		default:                                                               return -1;
+		}
+	}
+
 	// Rebuild the context command card for the current selection (all three races).
 	void refresh_card() {
 		card.clear();
@@ -1110,6 +1130,7 @@ struct play_ui : ui_functions {
 		unit_t* sel = u;                          // the unit we describe (own preferred, else first)
 		if (!sel) for (auto uid : current_selection) { sel = get_unit(uid); if (sel) break; }
 		if (!sel) { menu = 0; return; }
+		int active_act = u ? order_active_act(u->order_type->id) : -1;   // highlight the current mode
 
 		const char* title;
 		if (u && menu == 1) { title = "Build"; add_producible(u, true, 1); }
@@ -1185,7 +1206,7 @@ struct play_ui : ui_functions {
 			bool afford = (int)st.current_minerals[my_player] >= minc && (int)st.current_gas[my_player] >= gasc;
 			const char* desc = c.act == C_UPGRADE ? bw_upgrade_desc(c.upg)
 			                 : (c.act == C_RESEARCH || c.act == C_SPELL) ? bw_tech_desc(c.tech) : "";
-			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable \t requires \t desc
+			// KEY \t Label \t enabled \t icon \t minerals \t gas \t affordable \t requires \t desc \t active
 			card_text += '\n'; card_text += c.key; card_text += '\t'; card_text += c.label;
 			card_text += '\t'; card_text += (c.enabled ? '1' : '0');
 			card_text += '\t'; card_text += format("%d", icon).c_str();
@@ -1194,6 +1215,7 @@ struct play_ui : ui_functions {
 			card_text += '\t'; card_text += (afford ? '1' : '0');
 			card_text += '\t'; card_text += (c.req != UnitTypes::None) ? unit_name(c.req) : "";
 			card_text += '\t'; card_text += desc;
+			card_text += '\t'; card_text += (active_act >= 0 && (int)c.act == active_act) ? '1' : '0';
 		}
 	}
 

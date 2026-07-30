@@ -984,9 +984,11 @@ async function boot(session) {
         : '';
       const req = f.length > 7 ? f[7] : '';
       const popup = off && req ? `<span class="req">Requires ${esc(req)}</span>` : cost;
+      // Light up the button matching the unit's current order (Move while moving, etc.).
+      const active = f.length > 9 && f[9] === '1' ? ' active' : '';
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
-      html += `<span class="cmd${off}${poor}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
+      html += `<span class="cmd${off}${poor}${active}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
     }
     cardEl.innerHTML = html;
   };
