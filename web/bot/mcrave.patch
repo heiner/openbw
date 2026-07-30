@@ -353,10 +353,18 @@ index 8e5d1a4..dd05d4e 100644
                  // Increment or decrement based on where we need to go
                  last.x != pos.x ? (last.x > pos.x ? last.x-- : last.x++) : 0;
 diff --git a/Source/McRave/Main/Visuals.cpp b/Source/McRave/Main/Visuals.cpp
-index d000820..d7dbac6 100644
+index d000820..850827b 100644
 --- a/Source/McRave/Main/Visuals.cpp
 +++ b/Source/McRave/Main/Visuals.cpp
-@@ -230,12 +230,7 @@ namespace McRave::Visuals {
+@@ -1,7 +1,6 @@
+ #include "Visuals.h"
+ 
+ #include <chrono>
+-#include <windows.h>
+ 
+ #include "Builds/All/BuildOrder.h"
+ #include "Builds/All/Learning.h"
+@@ -230,12 +229,7 @@ namespace McRave::Visuals {
          void getCurrentWindow()
          {
              // Thanks random cpp forum user
