@@ -812,6 +812,21 @@ struct play_ui : ui_functions {
 		case U::Protoss_Stargate:         out[0] = U::Protoss_Cybernetics_Core; break;
 		case U::Protoss_Fleet_Beacon:     out[0] = U::Protoss_Stargate; break;
 		case U::Protoss_Arbiter_Tribunal: out[0] = U::Protoss_Templar_Archives; out[1] = U::Protoss_Stargate; break;
+		// Trainable units gated on a tech building or addon (producer is bw_what_builds).
+		case U::Terran_Firebat: case U::Terran_Medic: out[0] = U::Terran_Academy; break;
+		case U::Terran_Ghost:          out[0] = U::Terran_Academy; out[1] = U::Terran_Covert_Ops; break;
+		case U::Terran_Goliath:        out[0] = U::Terran_Armory; break;
+		case U::Terran_Siege_Tank_Tank_Mode: out[0] = U::Terran_Machine_Shop; break;
+		case U::Terran_Dropship:       out[0] = U::Terran_Control_Tower; break;
+		case U::Terran_Science_Vessel: out[0] = U::Terran_Control_Tower; out[1] = U::Terran_Science_Facility; break;
+		case U::Terran_Battlecruiser:  out[0] = U::Terran_Control_Tower; out[1] = U::Terran_Physics_Lab; break;
+		case U::Terran_Valkyrie:       out[0] = U::Terran_Control_Tower; out[1] = U::Terran_Armory; break;
+		case U::Protoss_Dragoon:       out[0] = U::Protoss_Cybernetics_Core; break;
+		case U::Protoss_High_Templar: case U::Protoss_Dark_Templar: out[0] = U::Protoss_Templar_Archives; break;
+		case U::Protoss_Reaver:        out[0] = U::Protoss_Robotics_Support_Bay; break;
+		case U::Protoss_Observer:      out[0] = U::Protoss_Observatory; break;
+		case U::Protoss_Arbiter:       out[0] = U::Protoss_Arbiter_Tribunal; break;
+		case U::Protoss_Carrier:       out[0] = U::Protoss_Fleet_Beacon; break;
 		default: break;
 		}
 	}
@@ -832,6 +847,31 @@ struct play_ui : ui_functions {
 		case U::Terran_Machine_Shop:   return U::Terran_Factory;
 		case U::Terran_Control_Tower:  return U::Terran_Starport;
 		case U::Terran_Covert_Ops: case U::Terran_Physics_Lab: return U::Terran_Science_Facility;
+		default: return U::None;
+		}
+	}
+
+	// The building that trains a unit (BWAPI whatBuilds), independent of tech — the producer
+	// identity that unit_can_build() checks first. Lets a producer's card show its whole
+	// roster, graying the units still gated on tech, exactly as BW does. Zerg units morph
+	// from Larva (not a building) and keep their own card, so they're omitted here.
+	static UnitTypes bw_what_builds(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		case U::Terran_SCV:                  return U::Terran_Command_Center;
+		case U::Terran_Marine: case U::Terran_Firebat:
+		case U::Terran_Medic:  case U::Terran_Ghost:            return U::Terran_Barracks;
+		case U::Terran_Vulture: case U::Terran_Goliath:
+		case U::Terran_Siege_Tank_Tank_Mode:                   return U::Terran_Factory;
+		case U::Terran_Wraith: case U::Terran_Dropship: case U::Terran_Science_Vessel:
+		case U::Terran_Battlecruiser: case U::Terran_Valkyrie:  return U::Terran_Starport;
+		case U::Protoss_Probe:                                 return U::Protoss_Nexus;
+		case U::Protoss_Zealot: case U::Protoss_Dragoon:
+		case U::Protoss_High_Templar: case U::Protoss_Dark_Templar: return U::Protoss_Gateway;
+		case U::Protoss_Shuttle: case U::Protoss_Reaver:
+		case U::Protoss_Observer:                              return U::Protoss_Robotics_Facility;
+		case U::Protoss_Scout: case U::Protoss_Corsair:
+		case U::Protoss_Arbiter: case U::Protoss_Carrier:      return U::Protoss_Stargate;
 		default: return U::None;
 		}
 	}
@@ -953,11 +993,13 @@ struct play_ui : ui_functions {
 			bool can = unit_can_build(u, t);
 			UnitTypes req = UnitTypes::None;
 			if (!can) {
-				// Not buildable yet: keep it, grayed with its missing prereq, but only for the
-				// building/addon lists BW always shows — an unavailable trainable unit stays off
-				// the card. bw_build_key is non-zero only for real build-menu buildings.
+				// Not buildable yet: keep it, grayed with its missing prereq, for the lists BW
+				// always shows — the worker's building menu, a producer's addons, and a producer's
+				// own unit roster (Barracks shows Firebat/Medic grayed without an Academy, etc.).
+				// bw_build_key is non-zero only for real build-menu buildings.
 				bool always = (buildings_only && bw_build_key(id) && unit_race(t) == race && !bw_is_building_morph(id))
-				           || (!buildings_only && addon && bw_addon_parent(id) == u->unit_type->id);
+				           || (!buildings_only && addon && bw_addon_parent(id) == u->unit_type->id)
+				           || (!buildings_only && !tb && bw_what_builds(id) == u->unit_type->id);
 				if (!always) continue;
 				req = first_missing_req(id, u->owner);
 			}
