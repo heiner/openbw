@@ -319,6 +319,35 @@ index 98c9cb5..4078f36 100644
  
              // TODO: Impl
              if (building.requiresPsi()) {
+diff --git a/Source/McRave/Main/Logger.h b/Source/McRave/Main/Logger.h
+index f98cbc2..2ff030d 100644
+--- a/Source/McRave/Main/Logger.h
++++ b/Source/McRave/Main/Logger.h
+@@ -2,6 +2,7 @@
+ #include <BWAPI.h>
+ 
+ #include <ostream>
++#include "botlog.h"   // web/bot: route Logger to the browser console
+ 
+ namespace McRave::Logger {
+ 
+@@ -14,7 +15,6 @@ namespace McRave::Logger {
+     template <typename... Args> //
+     void writeToLogger(const char *file, int line, Args &&... args)
+     {
+-        std::ofstream &writeFile = getLogStream();
+         std::ostringstream ss;
+ 
+         auto bracketWrap = [](const auto &x) -> std::string {
+@@ -31,7 +31,7 @@ namespace McRave::Logger {
+         ss << bracketWrap(std::string(file) + ":" + std::to_string(line)) << " ";
+         (ss << ... << args);
+ 
+-        writeFile << ss.str() << "\n";
++        auto _s = ss.str(); js_bot_log(_s.c_str(), (int)_s.size());
+     }
+ 
+     constexpr const char *getFileName(const char *path)
 diff --git a/Source/McRave/Main/Util.h b/Source/McRave/Main/Util.h
 index 8e5d1a4..dd05d4e 100644
 --- a/Source/McRave/Main/Util.h
