@@ -185,6 +185,7 @@ struct bw_cmd {
 	void morph_archon() { begin(42); end(); }                        // 42 merge archon
 	void morph_dark_archon() { begin(90); end(); }                   // 90 merge dark archon
 	void player_leave(int reason) { begin(87); u8(reason); end(); }  // 87 leave (resign)
+	void cancel_build() { begin(24); end(); }                        // 24 cancel building under construction
 	void cancel_morph() { begin(25); end(); }                        // 25 cancel morph
 	void cancel_nuke() { begin(46); end(); }                         // 46 cancel nuke
 	void cancel_addon() { begin(52); end(); }                        // 52 cancel addon
@@ -1135,6 +1136,8 @@ struct play_ui : ui_functions {
 			cancel_op = 52;
 		else if (unit_race(u) == race_t::zerg && !u->build_queue.empty())
 			cancel_op = 25;
+		else if (u_grounded_building(u) && !u_completed(u))
+			cancel_op = 24;   // a building still going up (Terran/Protoss); refunds and frees the worker
 		if (cancel_op)
 			card.push_back({pick_key("Cancel"), "Cancel", C_CANCEL, U::None, true,
 			                TechTypes::None, UpgradeTypes::None, (uint16_t)cancel_op});
@@ -1651,6 +1654,7 @@ struct play_ui : ui_functions {
 			case C_CANCEL:    sync_selection();
 			                  if (c.unit == 46) cmds.cancel_nuke();
 			                  else if (c.unit == 52) cmds.cancel_addon();
+			                  else if (c.unit == 24) cmds.cancel_build();
 			                  else cmds.cancel_morph();
 			                  break;
 			}
