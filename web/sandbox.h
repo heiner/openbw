@@ -245,6 +245,7 @@ bool try_build_near(action_functions_T& af, int owner, const build_kit& kit, uni
 struct play_ui : ui_functions {
 	int my_player;
 	race_t my_race;
+	bool spectator = false;   // watching a bot-vs-bot: nobody's player (no acks; HUD follows selection)
 	build_kit kit;
 
 	const unit_type_t* pending_build = nullptr;   // building awaiting a placement click
@@ -439,6 +440,7 @@ struct play_ui : ui_functions {
 	// Play one of a unit's voice-ack sounds (first..last inclusive), the way the
 	// original game client did on select/order — the sim never plays these.
 	void play_unit_ack(unit_t* u, int first, int last) {
+		if (spectator) return;   // a spectator is nobody's player — no unit voices, for anyone
 		if (!u || first <= 0 || last < first) return;
 		int id = first + (sound_rotation++ % (last - first + 1));
 		play_sound(id, u->sprite->position, u, false);   // 4-arg form (override hides the others)
@@ -1328,6 +1330,8 @@ struct play_ui : ui_functions {
 	// "minerals\tgas\tsupply_used\tsupply_max" for the resource HUD.
 	const char* resources() {
 		int p = my_player, ri = (int)my_race;   // race index into the supply arrays
+		// Spectating: show the economy of whichever player's unit is selected.
+		if (spectator) if (unit_t* u = primary_selected(); u && u->owner < 8) { p = u->owner; ri = (int)unit_race(u); }
 		int used = st.supply_used[p][ri].raw_value / 2;
 		int max = st.supply_available[p][ri].raw_value / 2;
 		if (max > 200) max = 200;

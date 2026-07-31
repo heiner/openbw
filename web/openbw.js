@@ -10,11 +10,9 @@
 // Build id — CI replaces the placeholder with the commit SHA for cache-busting.
 const BUILD = '__BUILD__';
 
-// Debug flags (URL query). BOT_LOG mirrors a bot's own log output (e.g. McRave's
-// per-frame profiler) into the console; BOT_VS_BOT reveals the spectate mode, which
-// is off by default while its two-sim performance is worked out.
+// BOT_LOG (?debug or ?botlog) mirrors a bot's own log output (e.g. McRave's per-frame
+// profiler) into the console.
 const BOT_LOG = /(\?|&)(debug|botlog)\b/.test(location.search);
-const BOT_VS_BOT = /(\?|&)(debug|botvbot)\b/.test(location.search);
 
 // Archive index mapping must match web/wasm_main.cpp's js_file_reader:
 //   0 StarDat  1 BrooDat  2 Patch_rt  3 map
@@ -606,6 +604,7 @@ async function boot(session) {
   let shadow = null, bot2 = null;
   if (session.spectate && session.bot2) {
     x.openbw_reveal_map();
+    x.openbw_set_spectator(1);   // no unit voices; resource HUD follows the selected unit
     shadow = await makeBotReplica(assets, session.bot2.module, slots, session.bot2.slot, ...winSize());
     bot2 = { slot: session.bot2.slot };
   }
@@ -1310,9 +1309,6 @@ function buildSlots() {
 // addEventListener (not .onchange) so the multiplayer panel's own map handler coexists.
 mapSelect.addEventListener('change', () => { renderMapInfo(); buildSlots(); });
 $('spectate').addEventListener('change', buildSlots);   // toggling swaps "You" for a 2nd bot
-// Bot-vs-bot spectate is hidden by default (two full sims in one tab is still too heavy);
-// ?botvbot (or ?debug) reveals it.
-if (!BOT_VS_BOT) $('spectate-row').style.display = 'none';
 renderMapInfo(); buildSlots();
 
 $('start-game').onclick = () => {

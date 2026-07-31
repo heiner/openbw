@@ -350,6 +350,10 @@ OPENBW_EXPORT(openbw_stats) const char* openbw_stats() { return g_ui ? g_ui->sta
 // effect — used by the game-over "Look at map" so you can review the final board.
 OPENBW_EXPORT(openbw_reveal_map) void openbw_reveal_map() { if (g_ui) g_ui->fog_player = -1; }
 
+// Spectator mode (bot-vs-bot): no unit-ack voices, and the resource HUD follows the
+// selected unit's owner. Render/UI only — no sim effect.
+OPENBW_EXPORT(openbw_set_spectator) void openbw_set_spectator(int on) { if (g_ui) g_ui->spectator = on != 0; }
+
 // Debug: force the outcome (1 victory, 2 defeat) to exercise the game-over screen without
 // playing to elimination. Bypasses the competitive gate, so it works in single-player too.
 OPENBW_EXPORT(openbw_debug_outcome) void openbw_debug_outcome(int v) { if (g_ui) g_ui->outcome = v; }
