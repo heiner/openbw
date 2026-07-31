@@ -1883,32 +1883,34 @@ struct play_ui : ui_functions {
 		return nullptr;
 	}
 
-	// Damage summary for a unit: how many of the 4 wireframe parts are degraded (k) and to
-	// what color class. Also the JS-side change signature — redraw only when this moves.
-	void wire_state(unit_t* u, int& k, int& cls, bool& shield) {
+	// Damage summary for a unit, OG-style: only green, yellow, and red. Each of the 4 parts
+	// has two steps (green→yellow→red); `steps` (0..8) is dealt round-robin across the parts
+	// in wireframe_randomizer order, so light damage shows a couple of yellow parts and reds
+	// accumulate as HP drops. The outline pair follows overall HP thirds (`oc`), so a
+	// near-dead unit reads fully red. Also the JS change signature — redraw only when moved.
+	void wire_state(unit_t* u, int& steps, int& oc, bool& shield) {
 		int hp = u->hp.ceil().integer_part(), mx = u->unit_type->hitpoints.ceil().integer_part();
 		double r = mx > 0 ? (double)hp / mx : 1.0;
-		k = (int)((1.0 - r) * 4 + 0.5);
-		if (k < 0) k = 0; else if (k > 4) k = 4;
-		cls = r > 0.5 ? 0 : r > 0.25 ? 1 : 2;   // yellow / orange / red
+		steps = (int)((1.0 - r) * 8 + 0.5);
+		if (steps < 0) steps = 0; else if (steps > 8) steps = 8;
+		oc = r > 2.0 / 3 ? 0 : r > 1.0 / 3 ? 1 : 2;   // outline: green / yellow / red
 		shield = u->unit_type->has_shield && u->shield_points.integer_part() > 0;
 	}
 
-	// One line per selected unit when 2+ are selected (the row is a multi-selection UI):
-	// "id \t name \t hp \t maxhp \t state". `state` changes iff the tile must be redrawn.
+	// One line per selected unit: "id \t name \t hp \t maxhp \t state". `state` changes iff
+	// the tile must be redrawn. Shown for single selections too, as in the original.
 	const char* wires() {
 		wires_text.clear();
-		if (current_selection.size() < 2) return wires_text.c_str();
 		size_t n = 0;
 		for (auto uid : current_selection) {
 			unit_t* u = get_unit(uid);
 			if (!u) continue;
 			if (n++ == 12) break;
-			int k, cls; bool shield;
-			wire_state(u, k, cls, shield);
+			int steps, oc; bool shield;
+			wire_state(u, steps, oc, shield);
 			wires_text += format("%u\t%s\t%d\t%d\t%d\n", (unsigned)get_unit_id(u).raw_value,
 				unit_name(u->unit_type->id), u->hp.ceil().integer_part(),
-				u->unit_type->hitpoints.ceil().integer_part(), (k << 3) | (cls << 1) | (int)shield);
+				u->unit_type->hitpoints.ceil().integer_part(), (steps << 3) | (oc << 1) | (int)shield);
 		}
 		return wires_text.c_str();
 	}
@@ -1922,24 +1924,33 @@ struct play_ui : ui_functions {
 		if (fi >= wire_grp.frames.size()) return nullptr;   // only multi-selectable ids have frames
 		const auto& f = wire_grp.frames[fi];
 		wire_index.assign(32 * 32, 0);
-		draw_frame(f, false, wire_index.data(), 32, f.offset.x, f.offset.y, 32, 32,
-		           [](uint8_t c, uint8_t) { return c; });
-		int k, cls; bool shield;
-		wire_state(u, k, cls, shield);
+		// draw_frame's offset args are a source-side crop; the GRP frame offset is the
+		// destination position that centers the drawing in the 32x32 box, so bake it into
+		// the dst pointer (mis-passing it as the crop pushed every wireframe off-center).
+		draw_frame(f, false, wire_index.data() + (size_t)f.offset.y * 32 + f.offset.x, 32,
+		           0, 0, f.size.x, f.size.y, [](uint8_t c, uint8_t) { return c; });
+		int steps, oc; bool shield;
+		wire_state(u, steps, oc, shield);
 		int rnd = u->wireframe_randomizer & 3;
-		static const uint8_t DMG[3][3] = { {232,208,16}, {232,128,16}, {216,24,24} };
+		// The OG tri-color per state: 0 green, 1 yellow, 2 red; bright for parts and the main
+		// outline, dim for the detail outline.
+		static const uint8_t BRIGHT[3][3] = { {44,228,52},  {232,208,16}, {216,24,24} };
+		static const uint8_t DIM[3][3]    = { {24,148,30},  {150,134,10}, {140,16,16} };
 		wire_rgba.assign(32 * 32 * 4, 0);
 		for (size_t p = 0; p != 32 * 32; ++p) {
 			uint8_t c = wire_index[p];
 			if (!c) continue;
 			uint8_t* o = &wire_rgba[p * 4];
-			if (c == 192)      { o[0] = shield ? 96 : 44;  o[1] = shield ? 160 : 228; o[2] = shield ? 255 : 52; }
-			else if (c == 193) { o[0] = shield ? 56 : 24;  o[1] = shield ? 104 : 148; o[2] = shield ? 190 : 30; }
+			if (c == 192)      { if (shield) { o[0]=96; o[1]=160; o[2]=255; } else { o[0]=BRIGHT[oc][0]; o[1]=BRIGHT[oc][1]; o[2]=BRIGHT[oc][2]; } }
+			else if (c == 193) { if (shield) { o[0]=56; o[1]=104; o[2]=190; } else { o[0]=DIM[oc][0];    o[1]=DIM[oc][1];    o[2]=DIM[oc][2];    } }
 			else {
-				// A damage-tracked part (208-211 / 216-219): low 2 bits pick the part.
-				bool damaged = ((int)(c & 3) + rnd) % 4 < k;
-				if (damaged) { o[0] = DMG[cls][0]; o[1] = DMG[cls][1]; o[2] = DMG[cls][2]; }
-				else         { o[0] = 32; o[1] = 200; o[2] = 40; }
+				// A damage-tracked part (208-211 / 216-219): low 2 bits pick the part. Its rank
+				// in the degradation order is randomizer-seeded; `steps` deals one step per part
+				// round-robin, so each part is green (0 steps), yellow (1), or red (2).
+				int rank = ((int)(c & 3) + rnd) % 4;
+				int st = steps / 4 + (rank < steps % 4 ? 1 : 0);
+				if (st > 2) st = 2;
+				o[0] = BRIGHT[st][0]; o[1] = BRIGHT[st][1]; o[2] = BRIGHT[st][2];
 			}
 			o[3] = 255;
 		}
