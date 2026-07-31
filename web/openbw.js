@@ -461,24 +461,30 @@ async function makeBotReplica(assets, moduleName, slots, botSlot, w, h) {
 // and a few frames of input delay. Both peers must pass an identical `slots` list.
 // Bot-vs-bot spectate adds { spectate:true, bot:{slot,module}, bot2:{slot,module} }.
 async function boot(session) {
-  // Create the audio context now — inside the race-button click gesture — so the
-  // browser's autoplay policy doesn't leave it suspended; resume on later input too.
-  // Chrome caps hardware audio contexts (~6 per renderer process), and reload reuses the
-  // process — if leaked contexts have exhausted the cap, degrade to a silent game rather
-  // than letting boot die (which looked like "starting the next game freezes").
-  let audioCtx = null;
-  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
-  catch (e) { console.warn('[audio] no AudioContext — running silent:', e && e.message); }
-  const resumeAudio = () => { if (audioCtx) audioCtx.resume(); };
-  addEventListener('pointerdown', resumeAudio);
-  addEventListener('keydown', resumeAudio);
-
-  // Master gain node: every sound routes through it, so muting is a single knob.
-  const masterGain = audioCtx ? audioCtx.createGain() : null;
-  if (masterGain) masterGain.connect(audioCtx.destination);
-  const muteBtn = $('mute');
+  // Audio is created LAZILY on the first user gesture, never during boot. The constructor
+  // is a synchronous IPC to Chrome's shared audio service; on a reload the old game's
+  // context is being torn down in the same renderer, and constructing a new one in that
+  // window can block the main thread indefinitely — the "reload, then the next game hangs
+  // and Chrome offers to kill the page" freeze. By the first click/keypress the teardown
+  // is long finished (and a gesture is also what the autoplay policy wants). Sounds the
+  // engine loads before then are stashed as raw WAVs and decoded when audio comes up.
+  let audioCtx = null, masterGain = null;
+  const pendingWavs = {};    // id -> Uint8Array, loaded before the context existed
   let muted = false;
   try { muted = localStorage.getItem('openbw-muted') === '1'; } catch {}
+  const ensureAudio = () => {
+    if (audioCtx) { audioCtx.resume(); return; }
+    try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+    catch (e) { console.warn('[audio] no AudioContext — running silent:', e && e.message); return; }
+    masterGain = audioCtx.createGain();
+    masterGain.connect(audioCtx.destination);
+    applyMute();
+    for (const id of Object.keys(pendingWavs)) { decodeWav(+id, pendingWavs[id]); delete pendingWavs[id]; }
+  };
+  addEventListener('pointerdown', ensureAudio);
+  addEventListener('keydown', ensureAudio);
+
+  const muteBtn = $('mute');
   const applyMute = () => {
     if (masterGain) masterGain.gain.value = muted ? 0 : 1;
     muteBtn.textContent = muted ? '🔇' : '🔊';
@@ -489,7 +495,7 @@ async function boot(session) {
     muted = !muted;
     try { localStorage.setItem('openbw-muted', muted ? '1' : '0'); } catch {}
     applyMute();
-    resumeAudio();
+    ensureAudio();
   };
   applyMute();
 
@@ -506,7 +512,15 @@ async function boot(session) {
     }
   });
 
+  // Black-box recorder for the intermittent 100%-CPU wedge: stamp each boot stage and a
+  // once-a-second run heartbeat into localStorage, which survives a killed renderer. After
+  // a freeze, a fresh tab's console shows where the last life ended:
+  //   localStorage.getItem('openbw-heartbeat')
+  const hb = (stage) => { try { localStorage.setItem('openbw-heartbeat', stage + ' @' + new Date().toISOString()); } catch {} };
+  hb('boot:start');
+
   const assets = await loadAssets(session.mapFile || MAP_LOCAL);
+  hb('boot:assets-loaded');
 
   let memory;
   const getMemory = () => memory;
@@ -532,19 +546,22 @@ async function boot(session) {
     soundChannels[channel] = rec;
     source.start();
   };
+  const decodeWav = (id, wav) => {
+    audioCtx.decodeAudioData(wav.buffer).then((b) => {
+      soundBuffers[id] = b;
+      // A play requested while still decoding would be silently dropped
+      // (a one-shot sound like a selection ack) — fire it now that it's ready.
+      const p = pendingPlay[id];
+      if (p) { delete pendingPlay[id]; playBuffer(b, p.channel, p.volume); }
+    }, () => {});
+  };
   const audio = {
     js_sound_load(ptr, size) {
       const id = soundBuffers.length;
       soundBuffers.push(null);
-      if (!audioCtx) return id;   // silent mode: keep ids consistent, decode nothing
       const wav = new Uint8Array(memory.buffer, ptr, size).slice();   // copy out of wasm memory
-      audioCtx.decodeAudioData(wav.buffer).then((b) => {
-        soundBuffers[id] = b;
-        // A play requested while still decoding would be silently dropped
-        // (a one-shot sound like a selection ack) — fire it now that it's ready.
-        const p = pendingPlay[id];
-        if (p) { delete pendingPlay[id]; playBuffer(b, p.channel, p.volume); }
-      }, () => {});
+      if (audioCtx) decodeWav(id, wav);
+      else pendingWavs[id] = wav;   // decoded when the first gesture brings audio up
       return id;
     },
     js_sound_play(id, channel, volume) {
@@ -590,6 +607,7 @@ async function boot(session) {
   const wasmName = session.bot ? session.bot.module : 'openbw.wasm';
   const wasmReq = () => DEV ? fetch('./' + wasmName + '?t=' + Date.now(), { cache: 'no-store' })
                             : fetch('./' + wasmName + '?v=' + BUILD);
+  hb('boot:wasm-fetch');
   let instance;
   try {
     ({ instance } = await WebAssembly.instantiateStreaming(wasmReq(), imports));
@@ -605,6 +623,7 @@ async function boot(session) {
   const ctx = canvas.getContext('2d');
   const winSize = () => [Math.max(320, window.innerWidth | 0), Math.max(240, window.innerHeight | 0)];
 
+  hb('boot:engine-init');
   x._initialize();
   const { slots, mySlot, link = null, delay = 0 } = session;
   if (slots.length > 1) {
@@ -617,8 +636,9 @@ async function boot(session) {
   } else {
     x.openbw_init(...winSize(), slots[0].race, slots[0].slot);
   }
+  hb('boot:engine-ready');
   // Attach the BWAPI read-view so the bot can drive its slot (vs-Computer only).
-  if (session.bot) x.openbw_bot_attach(session.bot.slot);
+  if (session.bot) { hb('boot:bot-attach'); x.openbw_bot_attach(session.bot.slot); hb('boot:bot-attached'); }
   // Bot-vs-bot spectate: reveal the whole map and stand up the second bot on a shadow
   // replica that the Lockstep keeps bit-identical. This one (x) is the rendered spectator
   // view — full UI, sound, pause, input — with the human as an onlooker (Lockstep bot2 path).
@@ -905,13 +925,18 @@ async function boot(session) {
   // opponent" a few frames short of detecting the win.
   const OVER_GRACE_MS = 5000;
   let stepTimer, stepClock = performance.now(), lastProgress = performance.now(), overSince = 0;
+  let lastHb = 0;   // heartbeat pacing (see the black-box recorder)
   const stepLoop = () => {
     if (!paused && (!over || (link && performance.now() - overSince < OVER_GRACE_MS))) {
       const now = performance.now();
       if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
       let budget = Math.min(Math.floor((now - stepClock) / stepMs), MAX_CATCHUP);
       let advanced = 0;
+      // Heartbeat brackets the tick burst: if a wedge leaves 'run:pre-tick' as the last
+      // stamp, the spin is inside the engine step; 'run:frame=N' means we returned.
+      if (now - lastHb > 1000) { hb('run:pre-tick frame=' + lockstep.frame); }
       while (budget-- > 0 && performance.now() - now < MAX_BURST_MS && lockstep.tick()) advanced++;
+      if (now - lastHb > 1000) { hb('run:frame=' + lockstep.frame); lastHb = now; }
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;
       if (stepped) lastProgress = now;
