@@ -463,19 +463,24 @@ async function makeBotReplica(assets, moduleName, slots, botSlot, w, h) {
 async function boot(session) {
   // Create the audio context now — inside the race-button click gesture — so the
   // browser's autoplay policy doesn't leave it suspended; resume on later input too.
-  const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  const resumeAudio = () => audioCtx.resume();
+  // Chrome caps hardware audio contexts (~6 per renderer process), and reload reuses the
+  // process — if leaked contexts have exhausted the cap, degrade to a silent game rather
+  // than letting boot die (which looked like "starting the next game freezes").
+  let audioCtx = null;
+  try { audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { console.warn('[audio] no AudioContext — running silent:', e && e.message); }
+  const resumeAudio = () => { if (audioCtx) audioCtx.resume(); };
   addEventListener('pointerdown', resumeAudio);
   addEventListener('keydown', resumeAudio);
 
   // Master gain node: every sound routes through it, so muting is a single knob.
-  const masterGain = audioCtx.createGain();
-  masterGain.connect(audioCtx.destination);
+  const masterGain = audioCtx ? audioCtx.createGain() : null;
+  if (masterGain) masterGain.connect(audioCtx.destination);
   const muteBtn = $('mute');
   let muted = false;
   try { muted = localStorage.getItem('openbw-muted') === '1'; } catch {}
   const applyMute = () => {
-    masterGain.gain.value = muted ? 0 : 1;
+    if (masterGain) masterGain.gain.value = muted ? 0 : 1;
     muteBtn.textContent = muted ? '🔇' : '🔊';
     muteBtn.title = muted ? 'Unmute sound' : 'Mute sound';
   };
@@ -514,6 +519,7 @@ async function boot(session) {
   const pendingPlay = {};    // id -> {channel, volume} requested before decode finished
   const gainFor = (v) => Math.min(1, Math.max(0, v / 128));
   const playBuffer = (buf, channel, volume) => {
+    if (!audioCtx) return;
     const prev = soundChannels[channel];
     if (prev && prev.source) { try { prev.source.stop(); } catch {} }
     const source = audioCtx.createBufferSource();
@@ -530,6 +536,7 @@ async function boot(session) {
     js_sound_load(ptr, size) {
       const id = soundBuffers.length;
       soundBuffers.push(null);
+      if (!audioCtx) return id;   // silent mode: keep ids consistent, decode nothing
       const wav = new Uint8Array(memory.buffer, ptr, size).slice();   // copy out of wasm memory
       audioCtx.decodeAudioData(wav.buffer).then((b) => {
         soundBuffers[id] = b;
@@ -888,7 +895,10 @@ async function boot(session) {
   // delay 4) and drags its opponent down with it. That bound is the correctness property,
   // not a bug; raising `delay` trades input lag for it. In real play both windows are
   // visible and this never applies — but two tabs in one window will crawl.
-  const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000;
+  // MAX_BURST_MS bounds one timer fire by wall time as well: with an expensive bot a
+  // 32-frame burst could block the main thread for over a second — including while a
+  // reload's navigation was waiting on the running task, which wedged the page.
+  const MAX_CATCHUP = 32, MAX_DEBT_MS = 2000, MAX_BURST_MS = 40;
   // After our own verdict we keep feeding the lockstep for a grace window, so a finished
   // player doesn't starve the peer's turns before it reaches its own verdict. Without this
   // the loser goes `over`, stops sending turns, and the winner stalls on "Waiting for
@@ -901,7 +911,7 @@ async function boot(session) {
       if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
       let budget = Math.min(Math.floor((now - stepClock) / stepMs), MAX_CATCHUP);
       let advanced = 0;
-      while (budget-- > 0 && lockstep.tick()) advanced++;
+      while (budget-- > 0 && performance.now() - now < MAX_BURST_MS && lockstep.tick()) advanced++;
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;
       if (stepped) lastProgress = now;
@@ -942,6 +952,19 @@ async function boot(session) {
     stepTimer = setTimeout(stepLoop, Math.max(8, stepMs >> 1));
   };
   stepTimer = setTimeout(stepLoop, stepMs);
+
+  // Reload is how players go back to the main menu, and a same-origin reload reuses the
+  // renderer process — so anything the page doesn't release outlives it. AudioContexts
+  // hold one of ~6 per-process hardware slots until close(); leaking one per reload
+  // eventually makes the next boot's `new AudioContext()` fail. Also stop the step timer
+  // so no catch-up burst fires mid-teardown, and drop the debug handle to help the GC
+  // reclaim the (large) wasm memory sooner.
+  addEventListener('pagehide', () => {
+    clearTimeout(stepTimer);
+    try { if (audioCtx) audioCtx.close(); } catch {}
+    try { if (link) link.close(); } catch {}
+    if (DEV) window.__bw = null;
+  });
 
   // Pause/resume, shown like a video player (⏸ while running, ▶ while paused). The
   // ︎ text selector keeps the glyphs monochrome. A big "Paused" banner also shows.
