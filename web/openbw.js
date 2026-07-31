@@ -1114,6 +1114,40 @@ async function boot(session) {
     x.openbw_key(1, sym, 0); x.openbw_key(0, sym, 0);   // frame loop processes it
   });
 
+  // Group wireframes: one 32x32 tile per selected unit when 2+ are selected (BW's
+  // multi-selection row). openbw_wires() lists "id\tname\thp\tmax\tstate" per unit; the
+  // canvases are rebuilt only when ids or damage states change (a rebuild between mousedown
+  // and mouseup eats the click — same lesson as the command card), while the HP tooltips
+  // update in place every tick.
+  const wiresEl = $('wires');
+  let lastWireSig = '';
+  const updateWires = () => {
+    const t = readCString(x.openbw_wires());
+    const rows = t ? t.trim().split('\n').map((l) => l.split('\t')) : [];
+    const sig = rows.map((r) => r[0] + ':' + r[4]).join(',');
+    if (sig !== lastWireSig) {
+      lastWireSig = sig;
+      wiresEl.innerHTML = '';
+      rows.forEach((r, i) => {
+        const ptr = x.openbw_wire_rgba(i);
+        if (!ptr) return;
+        const c = document.createElement('canvas');
+        c.width = 32; c.height = 32;
+        const g = c.getContext('2d');
+        const img = g.createImageData(32, 32);
+        img.data.set(new Uint8Array(memory.buffer, ptr, 32 * 32 * 4));
+        g.putImageData(img, 0, 0);
+        c.dataset.id = r[0];
+        c.onclick = () => x.openbw_debug_select(+c.dataset.id, 0);   // click = select just this unit
+        wiresEl.appendChild(c);
+      });
+    }
+    // tooltips track HP without touching the canvas nodes
+    const kids = wiresEl.children;
+    for (let i = 0; i < rows.length && i < kids.length; i++)
+      kids[i].title = `${rows[i][1]} — HP ${rows[i][2]}/${rows[i][3]}`;
+  };
+
   // Producer status: "<progress%>\t<name(training)>\t<queued>…". The progress ticks
   // every frame, so only rebuild the chips when the item list changes and just move the
   // bar otherwise — rebuilding the whole thing each frame flickers and eats clicks.
@@ -1264,6 +1298,7 @@ async function boot(session) {
       ctx.putImageData(image, 0, 0);
     }
     updateCard();
+    updateWires();
     updateStatus();
     updateResources();
     updateError();
