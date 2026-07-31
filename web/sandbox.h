@@ -435,6 +435,17 @@ struct play_ui : ui_functions {
 		cmds.select(ids, n);
 	}
 
+	// Sync only the primary unit to the sim. Single-unit actions (action_build via
+	// get_single_selected_unit) silently no-op when the whole group is synced — with several
+	// SCVs selected, placing a building did nothing. BW sends one worker from the group too;
+	// the on-screen selection is untouched.
+	void sync_primary() {
+		unit_t* u = primary_selected();
+		if (!u) return;
+		uint16_t id = get_unit_id(u).raw_value;
+		cmds.select(&id, 1);
+	}
+
 	unit_t* primary_selected() {
 		for (auto uid : current_selection) {
 			unit_t* u = get_unit(uid);
@@ -1524,12 +1535,41 @@ struct play_ui : ui_functions {
 		return msg_out.c_str();
 	}
 
+	// Debug JS API (window.__bw.x.openbw_debug_*): the browser-console/automation story for
+	// driving the game without pixel-hunting the canvas — clicking units that move between a
+	// screenshot and the click is hopelessly flaky. List the units, then select by id.
+	//
+	// debug_units(): one unit per line, "id \t type \t owner \t x \t y \t order".
+	const char* debug_units() {
+		debug_text.clear();
+		for (size_t i = 0; i != 8; ++i)
+			for (unit_t* u : ptr(st.player_units[i]))
+				debug_text += format("%u\t%s\t%d\t%d\t%d\t%d\n", (unsigned)get_unit_id(u).raw_value,
+					unit_name(u->unit_type->id), u->owner,
+					u->sprite->position.x, u->sprite->position.y, (int)u->order_type->id);
+		return debug_text.c_str();
+	}
+	// debug_select(id, add): select a unit by the id debug_units() reported; add=1 extends
+	// the selection (shift-click), add=0 replaces it. Runs the normal selection path.
+	void debug_select(int raw_id, int add) {
+		unit_t* u = get_unit(unit_id((uint16_t)raw_id));
+		if (!u) return;
+		if (!add) current_selection_clear();
+		current_selection_add(u);
+		on_selection(false);
+	}
+
 	// Read-only state dump of the primary selected unit, for debugging from the JS console
 	// (window.__bw.x.openbw_debug_dump). One `key=value` per line.
 	a_string debug_text;
 	const char* debug_dump() {
 		debug_text.clear();
 		debug_text += format("selection=%d\n", (int)current_selection.size());
+		{   // the sim-side selection (what single-unit actions like build key off)
+			int n = 0; const char* first = "none";
+			for (unit_t* su : selected_units(my_player)) { if (!n) first = unit_name(su->unit_type->id); ++n; }
+			debug_text += format("sim_selection=%d first=%s\n", n, first);
+		}
 		unit_t* u = primary_selected();
 		if (!u) { debug_text += "primary=none\n"; return debug_text.c_str(); }
 		debug_text += format("unit=%s owner=%d\n", unit_name(u->unit_type->id), u->owner);
@@ -1742,7 +1782,7 @@ struct play_ui : ui_functions {
 		if (pending_addon) {
 			if ((int)st.current_minerals[my_player] < pending_addon->mineral_cost) { raise_error(E_MINERALS); return; }
 			if ((int)st.current_gas[my_player] < pending_addon->gas_cost) { raise_error(E_GAS); return; }
-			sync_selection();
+			sync_primary();   // build is a single-unit action (see sync_primary)
 			// The command carries the addon's tile; the sim derives the parent's destination
 			// from it and lifts off only when that differs from where the parent stands.
 			cmd_build(Orders::PlaceAddon, pending_addon,
@@ -1756,7 +1796,7 @@ struct play_ui : ui_functions {
 			if ((int)st.current_minerals[my_player] < pending_build->mineral_cost) { raise_error(E_MINERALS); return; }
 			if ((int)st.current_gas[my_player] < pending_build->gas_cost) { raise_error(E_GAS); return; }
 		}
-		sync_selection();
+		sync_primary();   // build is a single-unit action (see sync_primary)
 		cmd_build(pending_land ? Orders::BuildingLand : kit.build_order, pending_build, tx, ty);
 		clear_pending();   // one-shot; re-open the menu to place another
 	}

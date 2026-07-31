@@ -235,6 +235,10 @@ OPENBW_EXPORT(openbw_messages) const char* openbw_messages() { return g_ui ? g_u
 // Read-only debug dump of the primary selected unit (window.__bw.x.openbw_debug_dump).
 OPENBW_EXPORT(openbw_debug_dump) const char* openbw_debug_dump() { return g_ui ? g_ui->debug_dump() : ""; }
 
+// Debug JS API for console/automation testing: list units, select by id (see sandbox.h).
+OPENBW_EXPORT(openbw_debug_units) const char* openbw_debug_units() { return g_ui ? g_ui->debug_units() : ""; }
+OPENBW_EXPORT(openbw_debug_select) void openbw_debug_select(int id, int add) { if (g_ui) g_ui->debug_select(id, add); }
+
 // Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
 OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }
 
