@@ -155,6 +155,7 @@ patch(bwdata, [
      '    vars.game_type = 2;\n'
      '    vars.game_type_melee = true;\n'
      '    vars.is_replay = false;\n'
+     '    sync_st.latency = 3;  // web/bot: BW normal-speed command latency; keep == net.js BOT_LATENCY\n'
      '  }\n'
      '};\n\n'
      'Game makeExternalGame(void* bwgame_state_ptr, int localPlayerSlot) {\n'

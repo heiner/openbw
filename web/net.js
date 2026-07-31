@@ -21,6 +21,15 @@ export const PROTOCOL = 2;
 
 const EMPTY = new Uint8Array(0);
 
+// Bot command latency in frames. BW's latency is time-based (commands batch into network
+// "turns" on a wall-clock timer), so it spans ~3 frames at normal speed and ~5-6 at
+// "fastest"; bot ladders run the normal-speed 3-frame latency for snappier reactions. OpenBW
+// lets us set it in frames directly, so we pin it regardless of the visual game speed. Keep
+// this equal to what a bot reads from getLatencyFrames() — patch-vendor.py sets the external
+// game's sync_st.latency to the same value — so its getRemainingLatencyFrames() pacing lines
+// up with when its commands actually execute. Humans keep their own (usually zero) delay.
+export const BOT_LATENCY = 3;
+
 // --- signalling -------------------------------------------------------------------
 // There is no signalling server: the offer and answer are exchanged by copy-paste, like
 // the original game's direct-cable mode. They're gzipped and base64url'd to stay short.
@@ -258,13 +267,16 @@ export class Lockstep {
    * @param {number}  o.delay      input delay in frames (0 solo; a few frames for a peer)
    * @param {(msg:object)=>void} o.send
    */
-  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {}, bot = null, shadow = null, bot2 = null }) {
+  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {}, bot = null, shadow = null, bot2 = null, botDelay = BOT_LATENCY }) {
     this.x = x;
     this.memory = memory;
     this.slots = slots.slice();
     this.localSlot = localSlot;
     this.delay = delay;
     this.send = send;
+    // Command latency for bot-controlled slots (see BOT_LATENCY); only meaningful with a bot.
+    this.botDelay = (bot || bot2) ? botDelay : 0;
+    this.botSeeded = false;
     // A local AI producing one slot's turns (vs-Computer). It reads the shared sim and
     // emits BW command bytes just like the human, so it's just another local producer.
     this.bot = bot;   // { slot } or null
@@ -350,20 +362,30 @@ export class Lockstep {
     // Owe a batch for every frame through frame+delay. On the first tick this also
     // bootstraps the initial `delay` frames with empty batches, so peers immediately have
     // something to consume and nobody deadlocks waiting for turn 0.
+    // Seed the first botDelay frames with empty bot batches so the latency window can fill
+    // without the step gate stalling (nothing is scheduled to apply there yet).
+    if (this.botDelay && !this.botSeeded) {
+      this.botSeeded = true;
+      for (let f = 0; f < this.botDelay; f++) {
+        if (this.bot) this.#batch(f).set(this.bot.slot, EMPTY);
+        if (this.bot2) this.#batch(f).set(this.bot2.slot, EMPTY);
+      }
+    }
     while (this.nextLocalFrame <= this.frame + this.delay) {
       const f = this.nextLocalFrame++;
+      const bf = f + this.botDelay;   // a command the bot issues while seeing frame f executes at bf
       if (this.bot2) {
         // Spectate bot-vs-bot: both slots come from bots, each on its own replica. The
         // human is a spectator, so drop whatever their clicks staged (camera/select only).
         this.x.openbw_out_clear();
-        this.#batch(f).set(this.bot.slot, this.#drainBot(this.x, this.memory));
-        this.#batch(f).set(this.bot2.slot, this.#drainBot(this.shadow.x, this.shadow.memory));
+        this.#batch(bf).set(this.bot.slot, this.#drainBot(this.x, this.memory));
+        this.#batch(bf).set(this.bot2.slot, this.#drainBot(this.shadow.x, this.shadow.memory));
       } else {
         const d = this.#drainLocal();
         this.#batch(f).set(this.localSlot, d);
-        // The bot is a local producer for its slot: run its onFrame and stage its turn
-        // for the same frame. (delay is 0 vs a local bot, so f is the current frame.)
-        if (this.bot) this.#batch(f).set(this.bot.slot, this.#drainBot());
+        // The bot is a local producer for its slot: run its onFrame every frame and stage its
+        // turn for frame f + botDelay, matching BW's command latency (see BOT_LATENCY).
+        if (this.bot) this.#batch(bf).set(this.bot.slot, this.#drainBot());
         if (this.slots.length > 1) this.send({ t: 'turn', f, d });
       }
     }
