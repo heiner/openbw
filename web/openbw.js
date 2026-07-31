@@ -246,6 +246,12 @@ const SCANCODE = {
   ControlLeft: 224, ShiftLeft: 225, ControlRight: 228, ShiftRight: 229,
 };
 
+// A user-chosen key (KeyboardEvent.code) that acts exactly like Escape — for setups where
+// the physical Esc is awkward, and ahead of pointer-lock/fullscreen modes where the browser
+// reserves Esc for itself. Vim users' Caps Lock→Esc habit is the canonical example.
+let altEsc = '';
+try { altEsc = localStorage.getItem('openbw-alt-esc') || ''; } catch {}
+
 function wireInput(canvas, x) {
   const xy = (e) => {
     const r = canvas.getBoundingClientRect();
@@ -280,6 +286,14 @@ function wireInput(canvas, x) {
   const MOD_SC = new Set([224, 225, 228, 229]);
   const key = (down) => (e) => {
     if (document.activeElement && document.activeElement.tagName === 'INPUT') return;   // typing in chat
+    if (altEsc && e.code === altEsc) {
+      // Fire a complete Esc press. Caps Lock is a lock key — macOS delivers keydown when
+      // the lock turns on but only keyup when it turns off — so accept either edge for it;
+      // ordinary keys act on keydown alone (both edges would double-fire the cancel).
+      if (down || e.code === 'CapsLock') { x.openbw_key(1, 0, 41); x.openbw_key(0, 0, 41); }
+      e.preventDefault();
+      return;
+    }
     const sc = SCANCODE[e.code] || 0;
     const sym = e.key.length === 1 ? e.key.toLowerCase().charCodeAt(0) : 0;
     if (!sc && !sym) return;
@@ -625,6 +639,23 @@ async function boot(session) {
   optLines.onchange = () => {
     try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
     x.openbw_set_order_lines(optLines.checked ? 1 : 0);
+  };
+  // Alternative Esc key: click the button, press the key to bind (Esc itself clears).
+  // Stored as KeyboardEvent.code; the key handler routes it as a full Esc press.
+  const altEscBtn = $('opt-altesc');
+  const altEscShow = () => {
+    altEscBtn.textContent = altEsc ? altEsc.replace(/^(Key|Digit)/, '') : 'none';
+  };
+  altEscShow();
+  altEscBtn.onclick = (e) => {
+    e.stopPropagation();
+    altEscBtn.textContent = 'press a key…';
+    window.addEventListener('keydown', (ev) => {
+      ev.preventDefault(); ev.stopPropagation();
+      altEsc = ev.code === 'Escape' ? '' : ev.code;
+      try { localStorage.setItem('openbw-alt-esc', altEsc); } catch {}
+      altEscShow();
+    }, { capture: true, once: true });
   };
   // Save the recorded game as a StarCraft .rep. Our command stream already is BW's action
   // format, so the wasm just serialises what it recorded — opens in BW and replay tools.

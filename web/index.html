@@ -125,6 +125,9 @@
   #settings h3 { margin: 0 0 8px; font-size: 13px; color: #e2e8f0; }
   #settings label { display: flex; align-items: center; gap: 8px; cursor: pointer; margin: 6px 0; }
   #settings input { accent-color: #38bdf8; }
+  #settings .keybtn { margin-left: auto; background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
+    border-radius: 6px; padding: 3px 10px; font: inherit; cursor: pointer; }
+  #settings .keybtn:hover { background: #334155; }
   #settings select { margin-left: auto; background: #1e293b; color: #e2e8f0; border: 1px solid #334155;
     border-radius: 6px; padding: 2px 6px; font: inherit; cursor: pointer; }
   #settings .danger { width: 100%; margin-top: 12px; background: #7a1a1a; color: #fee2e2; }
@@ -273,6 +276,9 @@
       <option value="48">Faster</option>
       <option value="42">Fastest</option>
     </select>
+  </label>
+  <label title="A second key that acts like Esc (cancel). Click, then press the key you want; press Esc to clear.">Alt. Esc key
+    <button id="opt-altesc" class="keybtn">none</button>
   </label>
   <div id="opt-debug" style="display:none">
     <button id="dbg-victory">Debug: force Victory</button>
