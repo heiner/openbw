@@ -415,10 +415,39 @@ function wireInput(canvas, x) {
 
 // ---------------------------------------------------------------------------
 // Boot
+// A headless bot replica: its own memory + WASI over the shared assets, silent (the
+// rendered replica handles sound). Seats the full melee and attaches its bot. Used as the
+// shadow sim for the second bot in a spectated bot-vs-bot — the Lockstep keeps it in sync.
+async function makeBotReplica(assets, moduleName, slots, botSlot, w, h) {
+  const DEV = BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  let memory;
+  const env = {
+    js_file_size: (i) => assets[i].length,
+    js_read_data: (i, dst, off, n) => { new Uint8Array(memory.buffer).set(assets[i].subarray(off, off + n), dst); },
+    js_bot_log: (ptr, len) => { if (BOT_LOG) console.log('%c[bot ' + botSlot + ']', 'color:#c90', new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len))); },
+    js_sound_load: () => -1, js_sound_play: () => {}, js_sound_is_playing: () => 0, js_sound_stop: () => {}, js_sound_set_volume: () => {},
+  };
+  const req = () => DEV ? fetch('./' + moduleName + '?t=' + Date.now(), { cache: 'no-store' }) : fetch('./' + moduleName + '?v=' + BUILD);
+  let instance;
+  try { ({ instance } = await WebAssembly.instantiateStreaming(req(), { wasi_snapshot_preview1: makeWasi(() => memory), env })); }
+  catch { ({ instance } = await WebAssembly.instantiate(await (await req()).arrayBuffer(), { wasi_snapshot_preview1: makeWasi(() => memory), env })); }
+  const x = instance.exports;
+  memory = x.memory;
+  x._initialize();
+  const pairs = new Int32Array(slots.length * 2);
+  slots.forEach((s, i) => { pairs[2 * i] = s.slot; pairs[2 * i + 1] = s.race; });
+  const p = x.openbw_in_ptr(pairs.byteLength);
+  new Uint8Array(memory.buffer, p, pairs.byteLength).set(new Uint8Array(pairs.buffer));
+  x.openbw_init_mp(w, h, botSlot, slots.length);
+  x.openbw_bot_attach(botSlot);
+  return { x, memory };
+}
+
 // ---------------------------------------------------------------------------
 // session: { slots: [{slot, race}], mySlot, link, delay }
 // Single-player is one slot with no link and zero delay; 1v1 is two slots, a PeerLink,
 // and a few frames of input delay. Both peers must pass an identical `slots` list.
+// Bot-vs-bot spectate adds { spectate:true, bot:{slot,module}, bot2:{slot,module} }.
 async function boot(session) {
   // Create the audio context now — inside the race-button click gesture — so the
   // browser's autoplay policy doesn't leave it suspended; resume on later input too.
@@ -571,6 +600,15 @@ async function boot(session) {
   }
   // Attach the BWAPI read-view so the bot can drive its slot (vs-Computer only).
   if (session.bot) x.openbw_bot_attach(session.bot.slot);
+  // Bot-vs-bot spectate: reveal the whole map and stand up the second bot on a shadow
+  // replica that the Lockstep keeps bit-identical. This one (x) is the rendered spectator
+  // view — full UI, sound, pause, input — with the human as an onlooker (Lockstep bot2 path).
+  let shadow = null, bot2 = null;
+  if (session.spectate && session.bot2) {
+    x.openbw_reveal_map();
+    shadow = await makeBotReplica(assets, session.bot2.module, slots, session.bot2.slot, ...winSize());
+    bot2 = { slot: session.bot2.slot };
+  }
   wireInput(canvas, x);
 
   // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
@@ -650,7 +688,8 @@ async function boot(session) {
     $('dbg-victory').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(1); };
     $('dbg-defeat').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(2); };
     $('dbg-resources').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_resources(2000, 1000); };
-    debugResourcesPending = true;   // start rich; applied after the first step sets the melee start
+    // Not while spectating: a cheat mutates only the rendered replica, desyncing the shadow.
+    debugResourcesPending = !session.spectate;   // start rich; applied after the first step sets the melee start
   }
 
   // Chat (Enter to open). Messages go into the same log the sim uses for eliminations, via
@@ -738,6 +777,7 @@ async function boot(session) {
     delay,
     send: (msg) => { if (link && msg.t === 'turn') link.sendTurn(msg.f, msg.d); },
     bot: session.bot || null,
+    shadow, bot2,   // set only when spectating a bot-vs-bot match
   });
   let dropped = null;   // set when the peer is gone
   let over = false;     // game finished (win / lose / disconnect) — stop stepping
@@ -1186,146 +1226,6 @@ async function boot(session) {
 // command stream => bit-identical (asserted via openbw_checksum). Replica A is rendered
 // with fog off (spectator); replica B just produces its bot's orders. Human input is
 // camera-only — a stray command to one replica alone would desync them.
-async function bootBotVsBot(session) {
-  // DEBUG: in debug mode, mark progress in the tab title with the time since the previous
-  // mark (the phase's duration) — readable even if a wasm call wedges the page.
-  let _lap = performance.now();
-  const mark = (s) => { if (!BOT_LOG) return; const now = performance.now(); const d = Math.round(now - _lap); _lap = now;
-    document.title = 'BVB ' + s + ' +' + d + 'ms'; console.log('[bvb]', s, '+' + d + 'ms'); };
-  $('topbar').style.display = 'flex';
-  const canvas = $('screen');
-  const ctx = canvas.getContext('2d');
-  const winSize = () => [Math.max(320, window.innerWidth | 0), Math.max(240, window.innerHeight | 0)];
-  const DEV = BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
-  const wasmReq = (name) => DEV ? fetch('./' + name + '?t=' + Date.now(), { cache: 'no-store' })
-                                : fetch('./' + name + '?v=' + BUILD);
-
-  setMsg('Loading…');
-  const assets = await loadAssets(session.mapFile || MAP_LOCAL);
-  const [w, h] = winSize();
-  const silent = { js_sound_load: () => -1, js_sound_play: () => {}, js_sound_is_playing: () => 0,
-                   js_sound_stop: () => {}, js_sound_set_volume: () => {} };
-
-  // One bot replica: own memory + WASI over the shared assets, silent (a single spectator
-  // view is enough). Seats every slot's melee, then attaches this replica's own bot.
-  async function makeInstance(botSlot, moduleName) {
-    let memory;
-    const getMemory = () => memory;
-    const env = {
-      js_file_size: (i) => assets[i].length,
-      js_read_data: (i, dst, off, n) => { new Uint8Array(memory.buffer).set(assets[i].subarray(off, off + n), dst); },
-      js_bot_log: (ptr, len) => { if (BOT_LOG) console.log('%c[bot ' + botSlot + ']', 'color:#f90', new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len))); },
-      ...silent,
-    };
-    const imports = { wasi_snapshot_preview1: makeWasi(getMemory), env };
-    let instance;
-    try { ({ instance } = await WebAssembly.instantiateStreaming(wasmReq(moduleName), imports)); }
-    catch { ({ instance } = await WebAssembly.instantiate(await (await wasmReq(moduleName)).arrayBuffer(), imports)); }
-    const x = instance.exports;
-    memory = x.memory;
-    x._initialize();
-    const pairs = new Int32Array(session.slots.length * 2);
-    session.slots.forEach((s, i) => { pairs[2 * i] = s.slot; pairs[2 * i + 1] = s.race; });
-    const p = x.openbw_in_ptr(pairs.byteLength);
-    new Uint8Array(memory.buffer, p, pairs.byteLength).set(new Uint8Array(pairs.buffer));
-    mark('instantiated ' + moduleName);
-    mark('init_mp ' + botSlot);
-    x.openbw_init_mp(w, h, botSlot, session.slots.length);
-    mark('attach ' + botSlot);
-    x.openbw_bot_attach(botSlot);
-    mark('ready ' + botSlot);
-    return { x, getMemory };
-  }
-
-  const [botA, botB] = session.bots;   // each { slot, module, label }
-  setMsg('Starting bots…');
-  mark('assets loaded; make A');
-  const A = await makeInstance(botA.slot, botA.module);
-  mark('make B');
-  const B = await makeInstance(botB.slot, botB.module);
-  mark('reveal');
-  A.x.openbw_reveal_map();   // spectator: no fog
-  $('overlay').style.display = 'none';   // dismiss the loading splash (boot() does this too)
-  mark('loop start');
-
-  const drain = (inst) => {
-    inst.x.openbw_bot_tick();
-    const len = inst.x.openbw_bot_out_len();
-    if (!len) return null;
-    const out = new Uint8Array(inst.getMemory().buffer, inst.x.openbw_bot_out_ptr(), len).slice();
-    inst.x.openbw_bot_out_clear();
-    return out;
-  };
-  const apply = (inst, slot, bytes) => {
-    if (!bytes || !bytes.length) return;
-    const dst = inst.x.openbw_in_ptr(bytes.length);
-    new Uint8Array(inst.getMemory().buffer, dst, bytes.length).set(bytes);
-    inst.x.openbw_apply(slot, bytes.length);
-  };
-  const order = botA.slot < botB.slot ? [botA, botB] : [botB, botA];   // consistent apply order
-
-  const banner = (text) => {
-    let b = document.getElementById('bvb-banner');
-    if (!b) {
-      b = document.createElement('div'); b.id = 'bvb-banner';
-      b.style.cssText = 'position:fixed;top:0;left:0;right:0;text-align:center;padding:14px 20px;' +
-        'background:rgba(2,6,23,.82);color:#e2e8f0;font:600 18px system-ui;cursor:pointer;z-index:20';
-      b.onclick = () => location.replace(location.origin + location.pathname);
-      document.body.appendChild(b);
-    }
-    b.textContent = text + ' — click for menu';
-  };
-
-  let frame = 0, over = false, timer = 0;
-  const stepMs = 42;   // "fastest"; one sim frame per tick
-  const stepBoth = () => {
-    if (frame < 3) mark('f' + frame + ' tickA');
-    const cmd = new Map();
-    cmd.set(botA.slot, drain(A));
-    if (frame < 3) mark('f' + frame + ' tickB');
-    cmd.set(botB.slot, drain(B));
-    if (frame < 3) mark('f' + frame + ' step');
-    for (const inst of [A, B]) for (const bot of order) apply(inst, bot.slot, cmd.get(bot.slot));
-    A.x.openbw_step(); B.x.openbw_step();
-    frame++;
-    if (frame <= 3) mark('f' + frame + ' done');
-    if (frame % 200 === 0 && A.x.openbw_checksum() !== B.x.openbw_checksum())
-      console.warn('[bvb] replicas diverged at frame', frame, A.x.openbw_checksum(), B.x.openbw_checksum());
-    const o = A.x.openbw_outcome();   // from botA's view: 1 = A won, 2 = A lost (i.e. B won)
-    if (o) { over = true; banner(o === 1 ? botA.label + ' wins' : botB.label + ' wins'); }
-  };
-  const loop = () => { if (over) return; stepBoth(); timer = setTimeout(loop, stepMs); };
-  timer = setTimeout(loop, stepMs);
-
-  // Camera-only input on replica A (edge-scroll); no clicks/keys that could issue orders.
-  const xy = (e) => { const r = canvas.getBoundingClientRect();
-    return [Math.round((e.clientX - r.left) * canvas.width / r.width), Math.round((e.clientY - r.top) * canvas.height / r.height)]; };
-  canvas.addEventListener('mousemove', (e) => { const [px, py] = xy(e); A.x.openbw_mouse_move(px, py); });
-  canvas.addEventListener('mouseleave', () => A.x.openbw_mouse_move(-1, -1));
-  canvas.addEventListener('wheel', (e) => {
-    e.preventDefault();
-    const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
-    A.x.openbw_pan(Math.round(e.deltaX * scale), Math.round(e.deltaY * scale));
-  }, { passive: false });
-  let resizeTimer = 0;
-  window.addEventListener('resize', () => { clearTimeout(resizeTimer);
-    resizeTimer = setTimeout(() => A.x.openbw_resize(...winSize()), 150); });
-
-  let image = null, iw = 0, ih = 0;
-  const render = () => {
-    A.x.openbw_render(performance.now());
-    const fw = A.x.openbw_framebuffer_width(), fh = A.x.openbw_framebuffer_height(), ptr = A.x.openbw_framebuffer();
-    if (fw && fh && ptr) {
-      if (fw !== iw || fh !== ih) { iw = fw; ih = fh; canvas.width = fw; canvas.height = fh; image = ctx.createImageData(fw, fh); }
-      image.data.set(new Uint8Array(A.getMemory().buffer, ptr, fw * fh * 4));
-      ctx.putImageData(image, 0, 0);
-    }
-    requestAnimationFrame(render);
-  };
-  requestAnimationFrame(render);
-  if (DEV) window.__bvb = { A, B, frameOf: () => frame };
-}
-
 // Map choice applies to both single-player and multiplayer, so it lives outside the
 // multiplayer panel.
 const mapSelect = $('map-select');
@@ -1426,9 +1326,12 @@ $('start-game').onclick = () => {
     const b2 = OPPONENTS[s2];
     const picks = pickStartSlots(2, starts);
     const slots = [{ slot: picks[0], race: b1.race }, { slot: picks[1], race: b2.race }];
-    const bots = [{ slot: picks[0], module: b1.module, label: b1.label },
-                  { slot: picks[1], module: b2.module, label: b2.label }];
-    bootBotVsBot({ slots, bots, mapFile: file }).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
+    // A normal game (full UI) rendered as a spectator: bot 1 drives slot 0 here, bot 2 runs
+    // on a shadow replica boot() spins up. See the spectate handling in boot().
+    const session = { slots, mySlot: picks[0], mapFile: file, spectate: true,
+                      bot:  { slot: picks[0], module: b1.module },
+                      bot2: { slot: picks[1], module: b2.module } };
+    boot(session).catch((e) => { setMsg('Error: ' + e.message); console.error(e); });
     return;
   }
   // Randomise which start location each player gets (slot = start location = colour).

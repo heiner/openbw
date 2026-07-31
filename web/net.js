@@ -258,7 +258,7 @@ export class Lockstep {
    * @param {number}  o.delay      input delay in frames (0 solo; a few frames for a peer)
    * @param {(msg:object)=>void} o.send
    */
-  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {}, bot = null }) {
+  constructor({ x, memory, slots, localSlot, delay = 0, send = () => {}, bot = null, shadow = null, bot2 = null }) {
     this.x = x;
     this.memory = memory;
     this.slots = slots.slice();
@@ -268,6 +268,11 @@ export class Lockstep {
     // A local AI producing one slot's turns (vs-Computer). It reads the shared sim and
     // emits BW command bytes just like the human, so it's just another local producer.
     this.bot = bot;   // { slot } or null
+    // Bot-vs-bot spectate: a second bot on a second sim replica (`shadow`, a { x, memory }).
+    // Each frame both bots' commands are applied to BOTH replicas so they stay bit-identical;
+    // the local player is a spectator (no human turn). shadow/bot2 are null for every other mode.
+    this.shadow = shadow;
+    this.bot2 = bot2;   // { slot } — its bot runs on `shadow`
     this.frame = 0;           // next frame to simulate
     this.nextLocalFrame = 0;  // next frame we still owe a local batch for
     this.turns = new Map();   // frame -> Map(slot -> Uint8Array)
@@ -313,22 +318,22 @@ export class Lockstep {
     return out;
   }
 
-  /** Run the bot's onFrame for the current view and pull its commands (same framing). */
-  #drainBot() {
-    this.x.openbw_bot_tick();
-    const len = this.x.openbw_bot_out_len();
+  /** Run the bot's onFrame on a replica and pull its commands (same framing). */
+  #drainBot(x = this.x, memory = this.memory) {
+    x.openbw_bot_tick();
+    const len = x.openbw_bot_out_len();
     if (!len) return EMPTY;
-    const out = new Uint8Array(this.memory.buffer, this.x.openbw_bot_out_ptr(), len).slice();
-    this.x.openbw_bot_out_clear();
+    const out = new Uint8Array(memory.buffer, x.openbw_bot_out_ptr(), len).slice();
+    x.openbw_bot_out_clear();
     return out;
   }
 
-  /** Hand one player's batch to the sim. openbw_in_ptr can grow memory, so view after. */
-  #apply(slot, bytes) {
+  /** Hand one player's batch to a replica. openbw_in_ptr can grow memory, so view after. */
+  #apply(slot, bytes, x = this.x, memory = this.memory) {
     if (!bytes || !bytes.length) return;
-    const dst = this.x.openbw_in_ptr(bytes.length);
-    new Uint8Array(this.memory.buffer, dst, bytes.length).set(bytes);
-    this.x.openbw_apply(slot, bytes.length);
+    const dst = x.openbw_in_ptr(bytes.length);
+    new Uint8Array(memory.buffer, dst, bytes.length).set(bytes);
+    x.openbw_apply(slot, bytes.length);
   }
 
   /** Slots we're still waiting on for frame `f`. */
@@ -347,12 +352,20 @@ export class Lockstep {
     // something to consume and nobody deadlocks waiting for turn 0.
     while (this.nextLocalFrame <= this.frame + this.delay) {
       const f = this.nextLocalFrame++;
-      const d = this.#drainLocal();
-      this.#batch(f).set(this.localSlot, d);
-      // The bot is a local producer for its slot: run its onFrame and stage its turn
-      // for the same frame. (delay is 0 vs a local bot, so f is the current frame.)
-      if (this.bot) this.#batch(f).set(this.bot.slot, this.#drainBot());
-      if (this.slots.length > 1) this.send({ t: 'turn', f, d });
+      if (this.bot2) {
+        // Spectate bot-vs-bot: both slots come from bots, each on its own replica. The
+        // human is a spectator, so drop whatever their clicks staged (camera/select only).
+        this.x.openbw_out_clear();
+        this.#batch(f).set(this.bot.slot, this.#drainBot(this.x, this.memory));
+        this.#batch(f).set(this.bot2.slot, this.#drainBot(this.shadow.x, this.shadow.memory));
+      } else {
+        const d = this.#drainLocal();
+        this.#batch(f).set(this.localSlot, d);
+        // The bot is a local producer for its slot: run its onFrame and stage its turn
+        // for the same frame. (delay is 0 vs a local bot, so f is the current frame.)
+        if (this.bot) this.#batch(f).set(this.bot.slot, this.#drainBot());
+        if (this.slots.length > 1) this.send({ t: 'turn', f, d });
+      }
     }
 
     if (this.missing(this.frame).length) {
@@ -361,12 +374,17 @@ export class Lockstep {
     }
     this.stalledSince = 0;
 
-    // Apply in slot order so every peer applies in the same order.
+    // Apply in slot order so every peer applies in the same order — to both replicas when
+    // spectating, keeping them bit-identical.
     const m = this.turns.get(this.frame);
-    for (const s of this.slots) this.#apply(s, m.get(s));
+    for (const s of this.slots) {
+      this.#apply(s, m.get(s), this.x, this.memory);
+      if (this.shadow) this.#apply(s, m.get(s), this.shadow.x, this.shadow.memory);
+    }
     this.turns.delete(this.frame);
 
     this.x.openbw_step();
+    if (this.shadow) this.shadow.x.openbw_step();
     this.frame++;
     return true;
   }
