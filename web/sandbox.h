@@ -1406,7 +1406,10 @@ struct play_ui : ui_functions {
 	void raise_error(err_kind k) {
 		error_text = err_message(k); ++error_seq;
 		int s = err_sound(k);   // on-screen centre → full volume
-		if (s >= 0) play_sound(s, screen_pos + xy((int)screen_width / 2, (int)screen_height / 2), nullptr, false);
+		// Advisor errors are global UI feedback in BW: always audible, not gated by fog or
+		// where the camera happens to point. Playing at xy() makes sound_audible pass and the
+		// shared player picks full volume.
+		if (s >= 0) play_sound(s, xy(), nullptr, false);
 	}
 	// "seq\tmessage": the host shows a toast whenever seq changes.
 	const char* error_status() {
@@ -1499,7 +1502,7 @@ struct play_ui : ui_functions {
 		                 pos.y < screen_pos.y + (int)screen_height;
 		if (alert_cooldown == 0 && under_attack_sound >= 0 && !on_screen) {
 			// On-screen centre → full volume, so the advisor is audible wherever the hit is.
-			play_sound(under_attack_sound, screen_pos + xy((int)screen_width / 2, (int)screen_height / 2), nullptr, false);
+			play_sound(under_attack_sound, xy(), nullptr, false);   // global advisor line, as in BW
 			alert_cooldown = 1800;   // ~30 s at 60 fps
 		}
 	}

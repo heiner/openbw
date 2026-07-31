@@ -683,6 +683,8 @@ struct ui_functions: ui_util_functions {
 			int distance_volume = 99 - 99 * distance / 512;
 
 			if (distance_volume > volume) volume = distance_volume;
+		} else {
+			volume = 99;   // global UI sound (no world position): full volume, as the original plays advisor lines
 		}
 
 		if (volume > 10) {
