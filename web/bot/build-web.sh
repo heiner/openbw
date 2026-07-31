@@ -99,9 +99,11 @@ fi
 # 4. Link the reactor module (exports via export_name attributes).
 echo "==> linking $OUT ..."
 LIBOBJS=$(find "$BUILD" -name '*.obj')
+# Temp + atomic rename: never let a reloading page fetch a half-linked wasm.
 "$CXX" -mexec-model=reactor -fno-exceptions -Wl,-z,stack-size=8388608 \
   "$OBJ/wasm_main.o" "$OBJ/wasm_backend.o" "$OBJ/dlstub.o" $BOT_OBJS $LIBOBJS \
-  -o "$OUT"
+  -o "$OUT.tmp"
+mv -f "$OUT.tmp" "$OUT"
 echo "==> built $OUT ($(ls -la "$OUT" | awk '{print $5}') bytes)"
 # Best-effort sanity print of the bot exports. wasm-objdump is a WABT tool the WASI
 # SDK doesn't bundle, so skip it when absent and never let this diagnostic (under

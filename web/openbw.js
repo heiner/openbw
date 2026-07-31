@@ -1122,6 +1122,7 @@ async function boot(session) {
   const wiresEl = $('wires');
   let lastWireSig = '';
   const updateWires = () => {
+    if (!x.openbw_wires) return;   // stale wasm module mid-dev: degrade, don't kill the loop
     const t = readCString(x.openbw_wires());
     // 64 = single selection's big wireframe, 32 = group tiles. Feature-detected: three wasm
     // modules share this JS, and an older module mid-dev must degrade, not kill the loop.
@@ -1140,7 +1141,9 @@ async function boot(session) {
         const img = g.createImageData(box, box);
         img.data.set(new Uint8Array(memory.buffer, ptr, box * box * 4));
         g.putImageData(img, 0, 0);
-        c.style.width = c.style.height = (box === 64 ? 96 : 38) + 'px';
+        // Big single frame displays 1:1 (64px): its 1px lines decimate badly below native
+        // size under pixelated scaling. Group tiles get a slight upscale.
+        c.style.width = c.style.height = (box === 64 ? 64 : 38) + 'px';
         c.dataset.id = r[0];
         c.onclick = () => x.openbw_debug_select(+c.dataset.id, 0);   // click = select just this unit
         wiresEl.appendChild(c);
