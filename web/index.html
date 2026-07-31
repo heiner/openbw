@@ -403,6 +403,12 @@
   </div>
 </div></div>
 
-<script type="module" src="./openbw.js?v=__BUILD__"></script>
+<!-- In prod, __BUILD__ is the commit SHA (cache-busts per deploy). In dev it stays the
+     literal "__BUILD__", so the browser would serve a stale openbw.js forever — load it
+     with a fresh timestamp instead so local edits always take. -->
+<script type="module">
+  const dev = location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+  import('./openbw.js?v=' + (dev ? Date.now() : '__BUILD__'));
+</script>
 </body>
 </html>

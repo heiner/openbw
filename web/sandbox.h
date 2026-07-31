@@ -1044,6 +1044,14 @@ struct play_ui : ui_functions {
 	// The unit-specific part of the card (not the build submenu); returns the title.
 	const char* card_for_unit(unit_t* u, UnitTypes id) {
 		using U = UnitTypes;
+		// A Terran SCV mid-construction shows only Cancel (Esc), like the original — all the
+		// normal worker actions are hidden. Cancel halts the build via Stop: the worker walks
+		// free and the building is left as an unfinished shell (resume by right-clicking it
+		// with an SCV). Only the SCV building it (order ConstructingBuilding) is in this state.
+		if (unit_is(u, U::Terran_SCV) && u->order_type->id == Orders::ConstructingBuilding) {
+			card.push_back({'\x1b', "Halt Construction", C_STOP, U::None, true});
+			return unit_name(id);
+		}
 		bool building = ut_building(u), worker = ut_worker(u);
 		// Movement orders for commandable mobile units (not buildings, larvae, eggs).
 		if (!building && !unit_is(u, U::Zerg_Larva) && !unit_is_egg(u)) add_move_orders();
@@ -1139,7 +1147,10 @@ struct play_ui : ui_functions {
 		else if (u_grounded_building(u) && !u_completed(u))
 			cancel_op = 24;   // a building still going up (Terran/Protoss); refunds and frees the worker
 		if (cancel_op)
-			card.push_back({pick_key("Cancel"), "Cancel", C_CANCEL, U::None, true,
+			// Cancel's hotkey is Escape in the original, not an auto-assigned letter. '\x1b'
+			// is matched by run_command from both the Escape key (see the key handler) and a
+			// click on the button (the host sends it as the sym).
+			card.push_back({'\x1b', "Cancel", C_CANCEL, U::None, true,
 			                TechTypes::None, UpgradeTypes::None, (uint16_t)cancel_op});
 		// Cargo: a bunker/transport shows each carried unit (click its icon to eject just
 		// that one) plus an Unload button that ejects everything.
@@ -2196,8 +2207,14 @@ struct play_ui : ui_functions {
 				play_unit_ack(u, u->unit_type->first_yes_sound, u->unit_type->last_yes_sound);
 			return true;
 		}
-		if (e.type == ev::type_key_down && e.scancode == 41) {   // Escape: back out of any pending mode / submenu
-			clear_pending(); targeting = false; menu = 0; refresh_card();
+		if (e.type == ev::type_key_down && e.scancode == 41) {   // Escape
+			// First back out of any pending placement / target / submenu, as in the original.
+			if (pending_build || targeting || menu != 0) {
+				clear_pending(); targeting = false; menu = 0; refresh_card();
+				return true;
+			}
+			// Nothing pending: Escape is the Cancel hotkey (construction, morph, addon, nuke).
+			run_command('\x1b');
 			return true;
 		}
 		if (e.type == ev::type_key_down && e.scancode == 44) {   // Space: jump to the most recent alert

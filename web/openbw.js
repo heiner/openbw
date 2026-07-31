@@ -963,7 +963,7 @@ async function boot(session) {
   // Command card overlay: openbw_card() returns "title\nKEY\tLabel\n…".
   const cardEl = $('card');
   const dec = new TextDecoder();
-  let lastCard = '';
+  let lastCard = '', lastBtnSig = null;
   const readCString = (ptr) => {
     const mem = new Uint8Array(memory.buffer);
     let end = ptr; while (mem[end]) end++;
@@ -995,15 +995,33 @@ async function boot(session) {
     const text = ptr ? readCString(ptr) : '';
     if (text === lastCard) return;
     lastCard = text;
-    if (!text) { cardEl.innerHTML = ''; return; }
+    if (!text) { cardEl.innerHTML = ''; lastBtnSig = null; return; }
     const lines = text.split('\n');
     // Title line: name \t "HP x/y" \t <second stat, e.g. Shields / Minerals — may be empty>.
+    // It ticks every frame whenever the unit's HP/energy changes — e.g. a building whose HP
+    // counts up during construction. Rebuilding the whole card each tick replaces the button
+    // nodes, and a click needs its mousedown and mouseup on the *same* node — so a mid-build
+    // rebuild between press and release silently ate the click (why "the Cancel button does
+    // nothing" while its hotkey worked). Build the title and the button grid separately and
+    // only touch the button DOM when the button set itself changes.
     const t0 = lines[0].split('\t');
-    let html = `<span class="title">${t0[0]}</span>`;
-    if (t0[1]) html += `<span class="stat">${t0[1]}</span>`;
-    if (t0[2]) html += `<span class="stat">${t0[2]}</span>`;
-    if (t0[3]) html += `<span class="fx">${t0[3]}</span>`;   // status effects (blind, parasite, …)
+    let titleHtml = `<span class="title">${t0[0]}</span>`;
+    if (t0[1]) titleHtml += `<span class="stat">${t0[1]}</span>`;
+    if (t0[2]) titleHtml += `<span class="stat">${t0[2]}</span>`;
+    if (t0[3]) titleHtml += `<span class="fx">${t0[3]}</span>`;   // status effects (blind, parasite, …)
+    const btnSig = lines.slice(1).join('\n');
+    if (btnSig === lastBtnSig) {
+      // Buttons unchanged: refresh only the title spans, leaving the .cmd nodes (and any
+      // in-flight click on them) intact.
+      const firstCmd = cardEl.querySelector('.cmd');
+      while (cardEl.firstChild && cardEl.firstChild !== firstCmd) cardEl.removeChild(cardEl.firstChild);
+      if (firstCmd) firstCmd.insertAdjacentHTML('beforebegin', titleHtml);
+      else cardEl.innerHTML = titleHtml;
+      return;
+    }
+    lastBtnSig = btnSig;
     const ri = getResIcons();   // mineral / gas sprite icons for the cost popup
+    let html = titleHtml;
     for (let i = 1; i < lines.length; i++) {
       const f = lines[i].split('\t');   // KEY, Label, enabled(1/0), iconUnitId(-1 = none)
       if (f.length < 2) continue;
@@ -1013,11 +1031,17 @@ async function boot(session) {
       const ico = url ? `<img class="ico" src="${url}">` : '';
       // Highlight the hotkey letter inside the label (first match — usually the first
       // letter, else an inner letter like "Medi[c]"). Fall back to a badge if absent.
+      // Key 0x1b is Escape (Cancel, as in the original) — show it as an "Esc" badge and
+      // encode data-key as a numeric entity so the char survives in the attribute.
+      const esc27 = f[0].charCodeAt(0) === 27;
+      const dataKey = esc27 ? '&#27;' : f[0];
       const key = f[0].toLowerCase(), label = f[1];
-      const k = label.toLowerCase().indexOf(key);
-      const labelHtml = k >= 0
-        ? `${label.slice(0, k)}<b>${label[k]}</b>${label.slice(k + 1)}`
-        : `<b>${f[0].toUpperCase()}</b> ${label}`;
+      const k = esc27 ? -1 : label.toLowerCase().indexOf(key);
+      const labelHtml = esc27
+        ? `<b>Esc</b> ${label}`
+        : k >= 0
+          ? `${label.slice(0, k)}<b>${label[k]}</b>${label.slice(k + 1)}`
+          : `<b>${f[0].toUpperCase()}</b> ${label}`;
       // Resource cost: tooltip on hover, and mark red when unaffordable.
       const minC = f.length > 4 ? +f[4] : 0, gasC = f.length > 5 ? +f[5] : 0;
       const poor = f.length > 6 && f[6] === '0' ? ' poor' : '';
@@ -1041,7 +1065,7 @@ async function boot(session) {
       const active = f.length > 9 && f[9] === '1' ? ' active' : '';
       // Wrap the label in one span so the flex `gap` on .cmd spaces only the icon from
       // the label — not the highlighted <b> from the rest of the word ("B uild").
-      html += `<span class="cmd${off}${poor}${active}" data-key="${f[0]}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
+      html += `<span class="cmd${off}${poor}${active}" data-key="${dataKey}">${ico}<span class="lbl">${labelHtml}</span>${popup}</span>`;
     }
     cardEl.innerHTML = html;
   };
