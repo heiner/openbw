@@ -353,6 +353,8 @@ struct play_ui : ui_functions {
 	// pressing the same group again centers the camera on it.
 	std::array<a_vector<unit_id>, 10> groups;
 	int last_recalled_group = -1;
+	double last_recall_ms = -1e9;   // ui_now at the last recall, for double-tap timing
+	static constexpr double GROUP_DBLTAP_MS = 300;   // recenter only within this window
 
 	void assign_group(int n) {
 		auto& g = groups[n];
@@ -377,7 +379,10 @@ struct play_ui : ui_functions {
 	}
 
 	void recall_group(int n) {
-		bool refocus = (n == last_recalled_group);   // second tap of the same group
+		// Center only on a genuine double-tap — the same group again within the window. A slow
+		// second press just reselects, as in the original (the camera doesn't jump).
+		bool refocus = (n == last_recalled_group && ui_now - last_recall_ms < GROUP_DBLTAP_MS);
+		last_recall_ms = ui_now;
 		current_selection_clear();
 		for (auto uid : groups[n]) {
 			unit_t* u = get_unit(uid);   // skips units that have since died
