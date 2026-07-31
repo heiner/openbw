@@ -235,13 +235,16 @@ OPENBW_EXPORT(openbw_messages) const char* openbw_messages() { return g_ui ? g_u
 // Read-only debug dump of the primary selected unit (window.__bw.x.openbw_debug_dump).
 OPENBW_EXPORT(openbw_debug_dump) const char* openbw_debug_dump() { return g_ui ? g_ui->debug_dump() : ""; }
 
-// Group wireframes (multi-selection row): one line per selected unit; per-unit 32x32 RGBA.
+// Selection wireframes: one line per selected unit; per-unit RGBA in a wire_box() square
+// (64 for a single selection's big console wireframe, 32 for group tiles).
 OPENBW_EXPORT(openbw_wires) const char* openbw_wires() { return g_ui ? g_ui->wires() : ""; }
 OPENBW_EXPORT(openbw_wire_rgba) const uint8_t* openbw_wire_rgba(int i) { return g_ui ? g_ui->render_wireframe((size_t)i) : nullptr; }
+OPENBW_EXPORT(openbw_wire_box) int openbw_wire_box() { return g_ui ? g_ui->wire_box() : 32; }
 
 // Debug JS API for console/automation testing: list units, select by id (see sandbox.h).
 OPENBW_EXPORT(openbw_debug_units) const char* openbw_debug_units() { return g_ui ? g_ui->debug_units() : ""; }
 OPENBW_EXPORT(openbw_debug_select) void openbw_debug_select(int id, int add) { if (g_ui) g_ui->debug_select(id, add); }
+OPENBW_EXPORT(openbw_debug_set_life) void openbw_debug_set_life(int id, int hp, int shields) { if (g_ui) g_ui->debug_set_life(id, hp, shields); }
 
 // Cancel the build-queue slot a status chip was clicked on (0 = the one in progress).
 OPENBW_EXPORT(openbw_cancel) void openbw_cancel(int slot) { if (g_ui) g_ui->cancel_queue_slot(slot); }

@@ -1558,6 +1558,18 @@ struct play_ui : ui_functions {
 		current_selection_add(u);
 		on_selection(false);
 	}
+	// debug_set_life(id, hp, shields): set a unit's HP/shields (-1 leaves a value alone).
+	// For exercising damage-dependent UI (wireframe states, shield rings) without a fight.
+	void debug_set_life(int raw_id, int hp, int shields) {
+		unit_t* u = get_unit(unit_id((uint16_t)raw_id));
+		if (!u) return;
+		if (hp >= 0) set_unit_hp(u, fp8::integer(hp));
+		if (shields >= 0) {
+			fp8 s = fp8::integer(shields);
+			fp8 mx = fp8::integer(u->unit_type->shield_points);
+			u->shield_points = s < mx ? s : mx;
+		}
+	}
 
 	// Read-only state dump of the primary selected unit, for debugging from the JS console
 	// (window.__bw.x.openbw_debug_dump). One `key=value` per line.
@@ -1861,7 +1873,8 @@ struct play_ui : ui_functions {
 	// so we map them straight to our own colors and don't need the UI palette we lack. Parts
 	// turn yellow→orange→red as HP drops, in an order seeded by the unit's
 	// wireframe_randomizer (an approximation of BW's exact rule). Shields tint the outline blue.
-	grp_t wire_grp;
+	grp_t wire_grp;       // grpwire.grp: 32x32 group tiles (131 frames, multi-selectable ids)
+	grp_t wire_big_grp;   // wirefram.grp: 64x64 single-unit wireframes (all 228 unit types)
 	bool wire_grp_loaded = false;
 	a_string wires_text;
 	a_vector<uint8_t> wire_index, wire_rgba;
@@ -1872,9 +1885,14 @@ struct play_ui : ui_functions {
 			a_vector<uint8_t> data;
 			load_data_file(data, "unit\\wirefram\\grpwire.grp");
 			wire_grp = read_grp(data_loading::data_reader_le(data.data(), data.data() + data.size()));
+			load_data_file(data, "unit\\wirefram\\wirefram.grp");
+			wire_big_grp = read_grp(data_loading::data_reader_le(data.data(), data.data() + data.size()));
 		}
 		return !wire_grp.frames.empty();
 	}
+
+	// Single selections use the big 64x64 console wireframe, groups the 32x32 tiles.
+	int wire_box() { return current_selection.size() == 1 ? 64 : 32; }
 
 	unit_t* selected_nth(size_t i) {
 		size_t n = 0;
@@ -1889,10 +1907,12 @@ struct play_ui : ui_functions {
 	// accumulate as HP drops. The outline pair follows overall HP thirds (`oc`), so a
 	// near-dead unit reads fully red. Also the JS change signature — redraw only when moved.
 	void wire_state(unit_t* u, int& steps, int& oc, bool& shield) {
-		int hp = u->hp.ceil().integer_part(), mx = u->unit_type->hitpoints.ceil().integer_part();
-		double r = mx > 0 ? (double)hp / mx : 1.0;
-		steps = (int)((1.0 - r) * 8 + 0.5);
-		if (steps < 0) steps = 0; else if (steps > 8) steps = 8;
+		// Exact fp8 compare: ANY damage must show — a wireframe is all-green only at 100%.
+		bool damaged = u->hp < u->unit_type->hitpoints;
+		double r = u->unit_type->hitpoints.raw_value
+			? (double)u->hp.raw_value / u->unit_type->hitpoints.raw_value : 1.0;
+		steps = damaged ? (int)((1.0 - r) * 8) + 1 : 0;   // ceil-like: at least one yellow part
+		if (steps > 8) steps = 8;
 		oc = r > 2.0 / 3 ? 0 : r > 1.0 / 3 ? 1 : 2;   // outline: green / yellow / red
 		shield = u->unit_type->has_shield && u->shield_points.integer_part() > 0;
 	}
@@ -1915,19 +1935,24 @@ struct play_ui : ui_functions {
 		return wires_text.c_str();
 	}
 
-	// Render the i-th selected unit's wireframe as 32x32 RGBA (the grp's frame box).
+	// Render the i-th selected unit's wireframe as RGBA in a wire_box()-sized square:
+	// 64x64 (wirefram.grp, all 228 types) for a single selection, 32x32 (grpwire.grp)
+	// tiles for a group. Active Protoss shields draw as a blue ring hugging the
+	// silhouette — the wireframe itself keeps its damage colors, as in the original.
 	const uint8_t* render_wireframe(size_t i) {
 		if (!load_wire_grp()) return nullptr;
 		unit_t* u = selected_nth(i);
 		if (!u) return nullptr;
+		size_t box = (size_t)wire_box();
+		const grp_t& grp = box == 64 ? wire_big_grp : wire_grp;
 		size_t fi = (size_t)u->unit_type->id;
-		if (fi >= wire_grp.frames.size()) return nullptr;   // only multi-selectable ids have frames
-		const auto& f = wire_grp.frames[fi];
-		wire_index.assign(32 * 32, 0);
+		if (fi >= grp.frames.size()) return nullptr;
+		const auto& f = grp.frames[fi];
+		wire_index.assign(box * box, 0);
 		// draw_frame's offset args are a source-side crop; the GRP frame offset is the
-		// destination position that centers the drawing in the 32x32 box, so bake it into
-		// the dst pointer (mis-passing it as the crop pushed every wireframe off-center).
-		draw_frame(f, false, wire_index.data() + (size_t)f.offset.y * 32 + f.offset.x, 32,
+		// destination position that centers the drawing in the box, so bake it into the
+		// dst pointer (mis-passing it as the crop pushed every wireframe off-center).
+		draw_frame(f, false, wire_index.data() + (size_t)f.offset.y * box + f.offset.x, box,
 		           0, 0, f.size.x, f.size.y, [](uint8_t c, uint8_t) { return c; });
 		int steps, oc; bool shield;
 		wire_state(u, steps, oc, shield);
@@ -1936,13 +1961,13 @@ struct play_ui : ui_functions {
 		// outline, dim for the detail outline.
 		static const uint8_t BRIGHT[3][3] = { {44,228,52},  {232,208,16}, {216,24,24} };
 		static const uint8_t DIM[3][3]    = { {24,148,30},  {150,134,10}, {140,16,16} };
-		wire_rgba.assign(32 * 32 * 4, 0);
-		for (size_t p = 0; p != 32 * 32; ++p) {
+		wire_rgba.assign(box * box * 4, 0);
+		for (size_t p = 0; p != box * box; ++p) {
 			uint8_t c = wire_index[p];
 			if (!c) continue;
 			uint8_t* o = &wire_rgba[p * 4];
-			if (c == 192)      { if (shield) { o[0]=96; o[1]=160; o[2]=255; } else { o[0]=BRIGHT[oc][0]; o[1]=BRIGHT[oc][1]; o[2]=BRIGHT[oc][2]; } }
-			else if (c == 193) { if (shield) { o[0]=56; o[1]=104; o[2]=190; } else { o[0]=DIM[oc][0];    o[1]=DIM[oc][1];    o[2]=DIM[oc][2];    } }
+			if (c == 192)      { o[0] = BRIGHT[oc][0]; o[1] = BRIGHT[oc][1]; o[2] = BRIGHT[oc][2]; }
+			else if (c == 193) { o[0] = DIM[oc][0];    o[1] = DIM[oc][1];    o[2] = DIM[oc][2];    }
 			else {
 				// A damage-tracked part (208-211 / 216-219): low 2 bits pick the part. Its rank
 				// in the degradation order is randomizer-seeded; `steps` deals one step per part
@@ -1953,6 +1978,31 @@ struct play_ui : ui_functions {
 				o[0] = BRIGHT[st][0]; o[1] = BRIGHT[st][1]; o[2] = BRIGHT[st][2];
 			}
 			o[3] = 255;
+		}
+		if (shield) {
+			// Blue shield ring hugging the OUTER contour only (the original's look). The
+			// wireframe is line art, so "outside" can't be flood-filled; approximate the
+			// contour with the per-row and per-column extremes of the silhouette.
+			auto ring = [&](size_t y2, size_t x3) {
+				if (y2 >= box || x3 >= box) return;
+				size_t p = y2 * box + x3;
+				if (wire_index[p]) return;
+				uint8_t* o = &wire_rgba[p * 4];
+				o[0] = 72; o[1] = 136; o[2] = 255; o[3] = 255;
+			};
+			// 1px, as in the original — a thin trace, not a band.
+			for (size_t y = 0; y != box; ++y) {
+				size_t lx = box, rx = box;
+				for (size_t x2 = 0; x2 != box; ++x2) if (wire_index[y * box + x2]) { if (lx == box) lx = x2; rx = x2; }
+				if (lx == box) continue;
+				ring(y, lx - 1); ring(y, rx + 1);
+			}
+			for (size_t x2 = 0; x2 != box; ++x2) {
+				size_t ty = box, by = box;
+				for (size_t y = 0; y != box; ++y) if (wire_index[y * box + x2]) { if (ty == box) ty = y; by = y; }
+				if (ty == box) continue;
+				ring(ty - 1, x2); ring(by + 1, x2);
+			}
 		}
 		return wire_rgba.data();
 	}

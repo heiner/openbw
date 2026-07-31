@@ -1123,8 +1123,11 @@ async function boot(session) {
   let lastWireSig = '';
   const updateWires = () => {
     const t = readCString(x.openbw_wires());
+    // 64 = single selection's big wireframe, 32 = group tiles. Feature-detected: three wasm
+    // modules share this JS, and an older module mid-dev must degrade, not kill the loop.
+    const box = x.openbw_wire_box ? x.openbw_wire_box() : 32;
     const rows = t ? t.trim().split('\n').map((l) => l.split('\t')) : [];
-    const sig = rows.map((r) => r[0] + ':' + r[4]).join(',');
+    const sig = box + '|' + rows.map((r) => r[0] + ':' + r[4]).join(',');
     if (sig !== lastWireSig) {
       lastWireSig = sig;
       wiresEl.innerHTML = '';
@@ -1132,11 +1135,12 @@ async function boot(session) {
         const ptr = x.openbw_wire_rgba(i);
         if (!ptr) return;
         const c = document.createElement('canvas');
-        c.width = 32; c.height = 32;
+        c.width = box; c.height = box;
         const g = c.getContext('2d');
-        const img = g.createImageData(32, 32);
-        img.data.set(new Uint8Array(memory.buffer, ptr, 32 * 32 * 4));
+        const img = g.createImageData(box, box);
+        img.data.set(new Uint8Array(memory.buffer, ptr, box * box * 4));
         g.putImageData(img, 0, 0);
+        c.style.width = c.style.height = (box === 64 ? 96 : 38) + 'px';
         c.dataset.id = r[0];
         c.onclick = () => x.openbw_debug_select(+c.dataset.id, 0);   // click = select just this unit
         wiresEl.appendChild(c);
