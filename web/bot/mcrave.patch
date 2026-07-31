@@ -1,3 +1,43 @@
+diff --git a/Source/BWEB/PathFind.cpp b/Source/BWEB/PathFind.cpp
+index dc399e4..7997518 100644
+--- a/Source/BWEB/PathFind.cpp
++++ b/Source/BWEB/PathFind.cpp
+@@ -121,9 +121,15 @@ namespace BWEB {
+             if (current.tile == source) {
+                 reachable         = true;
+                 TilePosition step = current.tile;
+-                while (step != target) {
++                // wasm port: only follow parents written by THIS search — a stale parent
++                // from an earlier search can form a cycle and loop forever. Bounded too.
++                int stepGuard = 256 * 256 + 16;
++                while (step != target && --stepGuard > 0) {
+                     tiles.push_back(step);
+-                    step = tileData[oneDim(step)].parent;
++                    auto &td = tileData[oneDim(step)];
++                    if (td.lastVisitedId != currentId)
++                        break;
++                    step = td.parent;
+                 }
+                 tiles.push_back(target);
+                 if (reverse)
+diff --git a/Source/BWEB/Station.cpp b/Source/BWEB/Station.cpp
+index 7ce4e74..72c9ae7 100644
+--- a/Source/BWEB/Station.cpp
++++ b/Source/BWEB/Station.cpp
+@@ -69,7 +69,12 @@ namespace BWEB {
+             TilePosition next = start;
+             Position pEnd     = Position(end);
+ 
+-            while (next.getDistance(end) > 1) {
++            // wasm port: the greedy walk can ping-pong forever at a map edge when `end`
++            // is invalid or unreachable (bad choke/natural detection); bound it.
++            if (!start.isValid() || !end.isValid())
++                return;
++            int walkGuard = 4096;
++            while (next.getDistance(end) > 1 && --walkGuard > 0) {
+                 auto distBest = DBL_MAX;
+                 start         = next;
+                 int itrcount  = 0;
 diff --git a/Source/BWEM/area.cpp b/Source/BWEM/area.cpp
 index 171491a..7d97eea 100644
 --- a/Source/BWEM/area.cpp
@@ -442,6 +482,65 @@ index 1d534e4..1760213 100644
          auto distBest                       = DBL_MAX;
          const BWEB::Station *closestStation = nullptr;
          for (auto &station : list) {
+diff --git a/Source/McRave/Map/Terrain/Terrain.cpp b/Source/McRave/Map/Terrain/Terrain.cpp
+index 0c0a5bd..7191454 100644
+--- a/Source/McRave/Map/Terrain/Terrain.cpp
++++ b/Source/McRave/Map/Terrain/Terrain.cpp
+@@ -383,11 +383,21 @@ namespace McRave::Terrain {
+             }
+ 
+             auto limit     = 16;
++            // wasm port: these marches can never terminate — dirBest stays (0,0) when no
++            // direction scored, and the walk tiles march off the map where GetMiniTile
++            // reads out of bounds (in wasm that's silent garbage instead of a crash, so
++            // the loop spins forever depending on heap contents). Stop at the map edge
++            // and bound the march.
+             auto breakout1 = false;
+-            while (!breakout1) {
++            int guard1     = 1024;
++            while (!breakout1 && dirBest != WalkPosition(0, 0) && --guard1 > 0) {
+                 tester1 += dirBest;
+                 for (auto &w : geometry1) {
+                     w += dirBest;
++                    if (!w.isValid()) {
++                        breakout1 = true;
++                        break;
++                    }
+                     if (mapBWEM.GetMiniTile(w).Altitude() >= chokeAltitude + limit) {
+                         breakout1 = true;
+                     }
+@@ -395,10 +405,15 @@ namespace McRave::Terrain {
+             }
+ 
+             auto breakout2 = false;
+-            while (!breakout2) {
++            int guard2     = 1024;
++            while (!breakout2 && dirBest != WalkPosition(0, 0) && --guard2 > 0) {
+                 tester2 -= dirBest;
+                 for (auto &w : geometry2) {
+                     w -= dirBest;
++                    if (!w.isValid()) {
++                        breakout2 = true;
++                        break;
++                    }
+                     if (mapBWEM.GetMiniTile(w).Altitude() >= chokeAltitude + limit) {
+                         breakout2 = true;
+                     }
+@@ -860,7 +875,13 @@ namespace McRave::Terrain {
+ 
+         // Check if the map is an island map
+         for (auto &start : mapBWEM.StartingLocations()) {
+-            if (!mapBWEM.GetArea(start)->AccessibleFrom(mapBWEM.GetArea(getMainTile())))
++            // wasm port: GetArea can return null (start center on unwalkable tiles);
++            // dereferencing null doesn't fault in wasm, it walks garbage memory.
++            auto startArea = mapBWEM.GetArea(start);
++            auto mainArea  = mapBWEM.GetArea(getMainTile());
++            if (!startArea || !mainArea)
++                continue;
++            if (!startArea->AccessibleFrom(mainArea))
+                 islandMap = true;
+         }
+ 
 diff --git a/Source/McRave/Micro/All/Commands.cpp b/Source/McRave/Micro/All/Commands.cpp
 index efc84ac..e5e9b23 100644
 --- a/Source/McRave/Micro/All/Commands.cpp

@@ -586,7 +586,14 @@ async function boot(session) {
       new Uint8Array(memory.buffer).set(assets[index].subarray(offset, offset + n), dst);
     },
     // A bot module (e.g. McRave) routes its Logger here; mirror it to the console in debug.
-    js_bot_log: (ptr, len) => { if (BOT_LOG) console.log('%c[bot]', 'color:#f90', new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len))); },
+    js_bot_log: (ptr, len) => {
+      if (!BOT_LOG) return;
+      const s = new TextDecoder().decode(new Uint8Array(memory.buffer, ptr, len));
+      // Crash recorder: the last bot line survives a killed renderer, so a wedged game
+      // can be localized afterwards (localStorage.getItem('openbw-botlog') in a new tab).
+      try { localStorage.setItem('openbw-botlog', s.slice(0, 200)); } catch {}
+      console.log('%c[bot]', 'color:#f90', s);
+    },
     ...audio,
   };
 
@@ -927,6 +934,7 @@ async function boot(session) {
   let stepTimer, stepClock = performance.now(), lastProgress = performance.now(), overSince = 0;
   let lastHb = 0;   // heartbeat pacing (see the black-box recorder)
   const stepLoop = () => {
+    let burstMs = 0;
     if (!paused && (!over || (link && performance.now() - overSince < OVER_GRACE_MS))) {
       const now = performance.now();
       if (now - stepClock > MAX_DEBT_MS) stepClock = now - MAX_DEBT_MS;
@@ -937,6 +945,7 @@ async function boot(session) {
       if (now - lastHb > 1000) { hb('run:pre-tick frame=' + lockstep.frame); }
       while (budget-- > 0 && performance.now() - now < MAX_BURST_MS && lockstep.tick()) advanced++;
       if (now - lastHb > 1000) { hb('run:frame=' + lockstep.frame); lastHb = now; }
+      burstMs = performance.now() - now;
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;
       if (stepped) lastProgress = now;
@@ -974,7 +983,10 @@ async function boot(session) {
     }
     // Tick faster than the frame interval so catch-up stays responsive; the loop itself
     // decides how many frames are actually due.
-    stepTimer = setTimeout(stepLoop, Math.max(8, stepMs >> 1));
+    // The gap also scales with how long this burst took: an expensive sim must fall
+    // behind real time rather than saturate the main thread — a page with no idle time
+    // can't render or take input and looks frozen even while the sim advances.
+    stepTimer = setTimeout(stepLoop, Math.max(8, stepMs >> 1, burstMs * 0.7));
   };
   stepTimer = setTimeout(stepLoop, stepMs);
 
@@ -1408,7 +1420,10 @@ const OPPONENTS = {
   'mcrave-t': { label: 'McRave (Terran)',   module: 'openbw-mcrave.wasm', race: 1 },
   'mcrave-z': { label: 'McRave (Zerg)',     module: 'openbw-mcrave.wasm', race: 0 },
 };
-const DEFAULT_OPP = 'mcrave-p';
+// ZZZKBot as the default: McRave is the stronger bot but its code has latent
+// unbounded-loop bugs (see mcrave.patch's "wasm port" guards) — one rare mid-game
+// spin is still unlocated, so the default opponent is the one with a clean record.
+const DEFAULT_OPP = 'zzzk';
 const slotsBox = $('slots');
 const curMap = () => MAPS.find((m) => m.file === mapSelect.value) || MAPS[0];
 
