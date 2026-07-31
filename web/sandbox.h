@@ -1906,14 +1906,13 @@ struct play_ui : ui_functions {
 	// in wireframe_randomizer order, so light damage shows a couple of yellow parts and reds
 	// accumulate as HP drops. The outline pair follows overall HP thirds (`oc`), so a
 	// near-dead unit reads fully red. Also the JS change signature — redraw only when moved.
-	void wire_state(unit_t* u, int& steps, int& oc, bool& shield) {
+	void wire_state(unit_t* u, int& steps, bool& shield) {
 		// Exact fp8 compare: ANY damage must show — a wireframe is all-green only at 100%.
 		bool damaged = u->hp < u->unit_type->hitpoints;
 		double r = u->unit_type->hitpoints.raw_value
 			? (double)u->hp.raw_value / u->unit_type->hitpoints.raw_value : 1.0;
 		steps = damaged ? (int)((1.0 - r) * 8) + 1 : 0;   // ceil-like: at least one yellow part
 		if (steps > 8) steps = 8;
-		oc = r > 2.0 / 3 ? 0 : r > 1.0 / 3 ? 1 : 2;   // outline: green / yellow / red
 		shield = u->unit_type->has_shield && u->shield_points.integer_part() > 0;
 	}
 
@@ -1926,11 +1925,11 @@ struct play_ui : ui_functions {
 			unit_t* u = get_unit(uid);
 			if (!u) continue;
 			if (n++ == 12) break;
-			int steps, oc; bool shield;
-			wire_state(u, steps, oc, shield);
+			int steps; bool shield;
+			wire_state(u, steps, shield);
 			wires_text += format("%u\t%s\t%d\t%d\t%d\n", (unsigned)get_unit_id(u).raw_value,
 				unit_name(u->unit_type->id), u->hp.ceil().integer_part(),
-				u->unit_type->hitpoints.ceil().integer_part(), (steps << 3) | (oc << 1) | (int)shield);
+				u->unit_type->hitpoints.ceil().integer_part(), (steps << 1) | (int)shield);
 		}
 		return wires_text.c_str();
 	}
@@ -1954,55 +1953,33 @@ struct play_ui : ui_functions {
 		// dst pointer (mis-passing it as the crop pushed every wireframe off-center).
 		draw_frame(f, false, wire_index.data() + (size_t)f.offset.y * box + f.offset.x, box,
 		           0, 0, f.size.x, f.size.y, [](uint8_t c, uint8_t) { return c; });
-		int steps, oc; bool shield;
-		wire_state(u, steps, oc, shield);
+		int steps; bool shield;
+		wire_state(u, steps, shield);
 		int rnd = u->wireframe_randomizer & 3;
-		// The OG tri-color per state: 0 green, 1 yellow, 2 red; bright for parts and the main
-		// outline, dim for the detail outline.
-		static const uint8_t BRIGHT[3][3] = { {44,228,52},  {232,208,16}, {216,24,24} };
-		static const uint8_t DIM[3][3]    = { {24,148,30},  {150,134,10}, {140,16,16} };
+		// OG tri-color part states: 0 green, 1 yellow, 2 red.
+		static const uint8_t PART[3][3] = { {44,228,52}, {232,208,16}, {216,24,24} };
 		wire_rgba.assign(box * box * 4, 0);
 		for (size_t p = 0; p != box * box; ++p) {
 			uint8_t c = wire_index[p];
 			if (!c) continue;
 			uint8_t* o = &wire_rgba[p * 4];
-			if (c == 192)      { o[0] = BRIGHT[oc][0]; o[1] = BRIGHT[oc][1]; o[2] = BRIGHT[oc][2]; }
-			else if (c == 193) { o[0] = DIM[oc][0];    o[1] = DIM[oc][1];    o[2] = DIM[oc][2];    }
-			else {
-				// A damage-tracked part (208-211 / 216-219): low 2 bits pick the part. Its rank
-				// in the degradation order is randomizer-seeded; `steps` deals one step per part
-				// round-robin, so each part is green (0 steps), yellow (1), or red (2).
+			if (c == 192 || c == 193) {
+				// The 192/193 band IS the shield-ring layer baked into the GRP: the original
+				// draws it blue while shields hold and hides it entirely otherwise. (Evidence:
+				// the Zerg-only frames — a race with no shields — don't contain these indices.)
+				if (!shield) continue;
+				if (c == 192) { o[0] = 72; o[1] = 136; o[2] = 255; }
+				else          { o[0] = 48; o[1] = 92;  o[2] = 190; }
+			} else {
+				// The unit line art: damage-tracked parts (208-211 / 216-219), low 2 bits pick
+				// the part. Its rank in the degradation order is randomizer-seeded; `steps`
+				// deals one step per part round-robin, so each part is green, yellow, or red.
 				int rank = ((int)(c & 3) + rnd) % 4;
 				int st = steps / 4 + (rank < steps % 4 ? 1 : 0);
 				if (st > 2) st = 2;
-				o[0] = BRIGHT[st][0]; o[1] = BRIGHT[st][1]; o[2] = BRIGHT[st][2];
+				o[0] = PART[st][0]; o[1] = PART[st][1]; o[2] = PART[st][2];
 			}
 			o[3] = 255;
-		}
-		if (shield) {
-			// Blue shield ring hugging the OUTER contour only (the original's look). The
-			// wireframe is line art, so "outside" can't be flood-filled; approximate the
-			// contour with the per-row and per-column extremes of the silhouette.
-			auto ring = [&](size_t y2, size_t x3) {
-				if (y2 >= box || x3 >= box) return;
-				size_t p = y2 * box + x3;
-				if (wire_index[p]) return;
-				uint8_t* o = &wire_rgba[p * 4];
-				o[0] = 72; o[1] = 136; o[2] = 255; o[3] = 255;
-			};
-			// 1px, as in the original — a thin trace, not a band.
-			for (size_t y = 0; y != box; ++y) {
-				size_t lx = box, rx = box;
-				for (size_t x2 = 0; x2 != box; ++x2) if (wire_index[y * box + x2]) { if (lx == box) lx = x2; rx = x2; }
-				if (lx == box) continue;
-				ring(y, lx - 1); ring(y, rx + 1);
-			}
-			for (size_t x2 = 0; x2 != box; ++x2) {
-				size_t ty = box, by = box;
-				for (size_t y = 0; y != box; ++y) if (wire_index[y * box + x2]) { if (ty == box) ty = y; by = y; }
-				if (ty == box) continue;
-				ring(ty - 1, x2); ring(by + 1, x2);
-			}
 		}
 		return wire_rgba.data();
 	}
