@@ -266,7 +266,10 @@ try { altEsc = localStorage.getItem('openbw-alt-esc') || ''; } catch {}
 // (image-rendering: pixelated). 1x = native resolution, the default and minimum;
 // zooming in gives bigger, chunkier OG-style pixels. Pinch / Ctrl+wheel adjusts it.
 let zoom = 1;
-try { zoom = Math.min(3, Math.max(1, parseFloat(localStorage.getItem('openbw-zoom')) || 1)); } catch {}
+// Max zoom: never render narrower than the original 640x480 — whichever axis
+// hits its limit first caps the zoom.
+const zoomMax = () => Math.max(1, Math.min(window.innerWidth / 640, window.innerHeight / 480));
+try { zoom = Math.min(zoomMax(), Math.max(1, parseFloat(localStorage.getItem('openbw-zoom')) || 1)); } catch {}
 const winSize = () => [Math.max(320, (window.innerWidth / zoom) | 0), Math.max(240, (window.innerHeight / zoom) | 0)];
 
 function wireInput(canvas, x) {
@@ -408,7 +411,7 @@ function wireInput(canvas, x) {
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      zoom = Math.min(3, Math.max(1, zoom * Math.exp(-e.deltaY * 0.01)));
+      zoom = Math.min(zoomMax(), Math.max(1, zoom * Math.exp(-e.deltaY * 0.01)));
       try { localStorage.setItem('openbw-zoom', zoom.toFixed(2)); } catch {}
       // Throttle to ~30ms so a pinch tracks continuously without a resize per event.
       const since = performance.now() - lastZoomApply;
