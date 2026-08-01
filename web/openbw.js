@@ -343,7 +343,17 @@ function wireInput(canvas, x) {
       return;
     }
     syncMods(e); const [px, py] = pos(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
+    // A game click while locked is an "outside" click for any open popup: hand the
+    // close-on-outside-click handlers their canvas-targeted signal.
+    if (e.button === 0 && locked()) canvas.click();
   });
+  // Under lock the browser still delivers its native click to the canvas, which the
+  // close-popup-on-outside-click handlers would see right after a routed DOM click
+  // opened settings/help — instantly undoing it. Swallow trusted clicks while
+  // locked; routed clicks are synthesized via el.click() (untrusted) and pass.
+  window.addEventListener('click', (e) => {
+    if (locked() && e.isTrusted) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   // Forward keys to the engine without shadowing the browser's own shortcuts.
   // The game only binds unmodified keys plus Ctrl+digit (control groups); anything
