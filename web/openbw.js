@@ -261,6 +261,18 @@ function wireInput(canvas, x) {
   };
   const sdlButton = (b) => (b === 0 ? 1 : b === 1 ? 2 : b === 2 ? 3 : 0);
 
+  // Pointer lock (opt-in, ⚙ settings): the mouse is captured by the window and drives a
+  // virtual cursor instead — it can't slip out of the window, so edge-scroll always
+  // works, like the original's fullscreen. The engine draws the BW cursor at the
+  // virtual position (the OS cursor is hidden under lock anyway). Esc releases the lock
+  // (browser-reserved); clicking re-engages it. The Alt-Esc setting still cancels.
+  let vx = 0, vy = 0;   // virtual cursor, canvas coords; seeded from the real mouse
+  const locked = () => document.pointerLockElement === canvas;
+  wireInput.lockWanted = false;   // set by the settings wiring in boot()
+  canvas.addEventListener('click', () => {
+    if (wireInput.lockWanted && !locked()) canvas.requestPointerLock();
+  });
+
   // Reflect a mouse event's modifier flags into the engine's key-state, which is
   // authoritative at click time. On macOS this lets Cmd (meta) stand in for Ctrl
   // for select-all-of-type — there Ctrl+click is hijacked by the OS as a right-click.
@@ -269,14 +281,30 @@ function wireInput(canvas, x) {
     x.openbw_key(e.shiftKey ? 1 : 0, 0, 225);               // virtual Shift
   };
 
-  canvas.addEventListener('mousemove', (e) => { const [px, py] = xy(e); x.openbw_mouse_move(px, py); });
+  // Under lock, coordinates come from the virtual cursor; otherwise from the event.
+  const pos = (e) => {
+    if (locked()) return [vx | 0, vy | 0];
+    const p = xy(e);
+    vx = p[0]; vy = p[1];   // keep the virtual cursor seeded for a seamless lock engage
+    return p;
+  };
+  canvas.addEventListener('mousemove', (e) => {
+    if (locked()) {
+      const r = canvas.getBoundingClientRect();
+      vx = Math.max(0, Math.min(canvas.width - 1, vx + e.movementX * canvas.width / r.width));
+      vy = Math.max(0, Math.min(canvas.height - 1, vy + e.movementY * canvas.height / r.height));
+      x.openbw_mouse_move(vx | 0, vy | 0);
+      return;
+    }
+    const [px, py] = pos(e); x.openbw_mouse_move(px, py);
+  });
   // Park the cursor off-screen when it leaves the canvas so edge-scrolling stops.
-  canvas.addEventListener('mouseleave', () => x.openbw_mouse_move(-1, -1));
+  canvas.addEventListener('mouseleave', () => { if (!locked()) x.openbw_mouse_move(-1, -1); });
   canvas.addEventListener('mousedown', (e) => {
-    syncMods(e); const [px, py] = xy(e); x.openbw_mouse_button(1, sdlButton(e.button), px, py, e.detail || 1);
+    syncMods(e); const [px, py] = pos(e); x.openbw_mouse_button(1, sdlButton(e.button), px, py, e.detail || 1);
   });
   window.addEventListener('mouseup', (e) => {
-    syncMods(e); const [px, py] = xy(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
+    syncMods(e); const [px, py] = pos(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
   // Forward keys to the engine without shadowing the browser's own shortcuts.
@@ -675,6 +703,22 @@ async function boot(session) {
     try { localStorage.setItem('openbw-order-lines', optLines.checked ? '1' : '0'); } catch {}
     x.openbw_set_order_lines(optLines.checked ? 1 : 0);
   };
+  // Mouse lock (pointer capture) + fullscreen. The lock preference persists; the lock
+  // itself engages on the next game click (browsers require a user gesture).
+  const optLock = $('opt-mouselock');
+  try { optLock.checked = localStorage.getItem('openbw-mouselock') === '1'; } catch {}
+  wireInput.lockWanted = optLock.checked;
+  optLock.onchange = () => {
+    wireInput.lockWanted = optLock.checked;
+    try { localStorage.setItem('openbw-mouselock', optLock.checked ? '1' : '0'); } catch {}
+    if (!optLock.checked && document.pointerLockElement) document.exitPointerLock();
+  };
+  $('opt-fullscreen').onclick = () => {
+    settingsPop.style.display = 'none';
+    if (document.fullscreenElement) document.exitFullscreen();
+    else document.documentElement.requestFullscreen().catch(() => {});
+  };
+
   // Alternative Esc key: click the button, press the key to bind (Esc itself clears).
   // Stored as KeyboardEvent.code; the key handler routes it as a full Esc press.
   const altEscBtn = $('opt-altesc');
