@@ -306,12 +306,11 @@ struct play_ui : ui_functions {
 	double flash_start = -1;                         // ms when the flash began (-1 = idle)
 	// Event feedback: unit-ready voices on completion, "under attack" voice + minimap flash.
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
-	int alert_color = -1;                         // minimap flash palette index (lazy)
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
 	int event_tick = 0;                           // local tick for the flash blink phase
-	static const int ALERT_TTL = 90;              // 3 sweeps of the 30-tick ping cycle
-	struct alert_t { xy pos; int ttl; };
-	a_vector<alert_t> alerts;                     // active minimap flash markers
+	static const int ALERT_TTL = 90;              // ~4 s of dot blinking
+	struct alert_t { unit_id unit; xy pos; int ttl; };
+	a_vector<alert_t> alerts;                     // units whose minimap dot is blinking
 	xy last_event_pos; bool have_last_event = false;   // Space recenters here
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
@@ -1500,17 +1499,17 @@ struct play_ui : ui_functions {
 		default: return u->unit_type->ready_sound > 0;
 		}
 	}
-	void add_alert(xy pos) {
-		have_last_event = true; last_event_pos = pos;   // Space recenters on the latest hit
-		// Dedup by location, not globally: an existing nearby ping is left to expire rather
-		// than refreshed (so a sustained fight doesn't ping forever), but a hit in a new area
-		// always pings — a single global cooldown used to swallow those and drop alerts.
-		bool near = false;
-		for (auto& a : alerts) {
-			int dx = a.pos.x - pos.x, dy = a.pos.y - pos.y;
-			if (dx * dx + dy * dy < 256 * 256) { near = true; break; }   // ~8 tiles
-		}
-		if (!near && alerts.size() < 8) alerts.push_back({pos, ALERT_TTL});
+	// Blink a unit's minimap dot, as the original does for completions and hits.
+	void ping_minimap(unit_t* u) {
+		have_last_event = true; last_event_pos = u->sprite->position;   // Space recenters here
+		for (auto& a : alerts)
+			if (a.unit == get_unit_id(u)) { a.ttl = ALERT_TTL; return; }
+		if (alerts.size() < 32) alerts.push_back({get_unit_id(u), u->sprite->position, ALERT_TTL});
+	}
+
+	void add_alert(unit_t* u) {
+		xy pos = u->sprite->position;
+		ping_minimap(u);
 		// Voice: quiet while the fight is already on screen (as the original is), and a
 		// long gap between announcements.
 		bool on_screen = pos.x >= screen_pos.x && pos.y >= screen_pos.y &&
@@ -1659,11 +1658,13 @@ struct play_ui : ui_functions {
 		bool seeding = !events_seeded;
 		for (unit_t* u : ptr(st.player_units[my_player])) {
 			uint16_t id = get_unit_id(u).raw_value;
-			if (u_completed(u) && announced.insert(id).second && !seeding && announces_ready(u))
+			if (u_completed(u) && announced.insert(id).second && !seeding && announces_ready(u)) {
 				play_sound(u->unit_type->ready_sound, u->sprite->position, u, false);
+				ping_minimap(u);
+			}
 			int life = u->hp.ceil().integer_part() + u->shield_points.integer_part();
 			auto it = last_life.find(id);
-			if (it != last_life.end() && life < it->second && !seeding) add_alert(u->sprite->position);
+			if (it != last_life.end() && life < it->second && !seeding) add_alert(u);
 			last_life[id] = life;
 		}
 		events_seeded = true;
@@ -2271,29 +2272,32 @@ struct play_ui : ui_functions {
 
 	// Minimap with blinking red blips at recent under-attack locations (drawn on top of
 	// the base minimap, which the engine renders after draw_callback).
-	// Minimap ping, like the original: four bracket lines sweeping inward onto the spot.
-	// A converging animation catches the eye far better than a static blip, and repeating
-	// the sweep keeps drawing attention for as long as the alert lives.
+	// Minimap ping, exactly like the original: the alerted unit's own dot strobes
+	// through its player color's tblink.pcx cycle (blue flash -> color -> off).
 	void draw_minimap(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_minimap(data, data_pitch);
 		if (alerts.empty()) return;
 		rect area = get_minimap_area();
 		if (area.from == area.to || (size_t)(area.to.x - area.from.x) != game_st.map_tile_width) return;
-		if (alert_color < 0) alert_color = nearest_palette_color(255, 40, 40);
-		auto plot = [&](int px, int py) {
-			if (px >= area.from.x && px < area.to.x && py >= area.from.y && py < area.to.y)
-				data[(size_t)py * data_pitch + px] = (uint8_t)alert_color;
-		};
-		const int CYCLE = 30, R0 = 14, R1 = 2;
 		for (auto& a : alerts) {
-			int mx = area.from.x + a.pos.x / 32, my = area.from.y + a.pos.y / 32;
-			// A full box outline closing in on the spot, repeating every CYCLE ticks.
-			int r = R0 - (((ALERT_TTL - a.ttl) % CYCLE) * (R0 - R1)) / CYCLE;
-			for (int i = -r; i <= r; ++i) {
-				plot(mx + i, my - r); plot(mx + i, my + r);   // top / bottom
-				plot(mx - r, my + i); plot(mx + r, my + i);   // left / right
+			unit_t* u = get_unit(a.unit);
+			if (!u || !unit_visble_on_minimap(u) || unit_hidden_by_fog(u)) continue;
+			int step = ((ALERT_TTL - a.ttl) / 3) % 8;
+			size_t crow = (size_t)st.players[u->owner].color;
+			if (crow >= 19) crow = 0;   // tblink.pcx has 19 rows
+			uint8_t color = img.blink_colors[8 * crow + step];
+			size_t w = u->unit_type->placement_size.x / 32u;
+			size_t h = u->unit_type->placement_size.y / 32u;
+			if (ut_building(u)) {
+				if (w > 4) w = 4;
+				if (h > 4) h = 4;
 			}
-			plot(mx, my);
+			if (w < 2) w = 2;
+			if (h < 2) h = 2;
+			rect dot;
+			dot.from = area.from + (u->sprite->position - u->unit_type->placement_size / 2) / 32u;
+			dot.to = dot.from + xy((int)w, (int)h);
+			fill_rectangle(data, data_pitch, dot, color);
 		}
 	}
 

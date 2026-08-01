@@ -39,6 +39,7 @@ struct tileset_image_data {
 struct image_data {
 	std::array<std::array<uint8_t, 8>, 16> player_unit_colors;
 	std::array<uint8_t, 16> player_minimap_colors;
+	std::array<uint8_t, 152> blink_colors;
 	std::array<uint8_t, 24> selection_colors;
 	std::array<uint8_t, 24> hp_bar_colors;
 	std::array<int, 0x100> creep_edge_frame_index{};
@@ -169,6 +170,13 @@ void load_image_data(image_data& img, load_data_file_F&& load_data_file) {
 	if (tminimap_pcx.width != 16 || tminimap_pcx.height != 1) error("tminimap.pcx dimensions are %dx%d (16x1 required)", tminimap_pcx.width, tminimap_pcx.height);
 	for (size_t i = 0; i != 16; ++i) {
 		img.player_minimap_colors[i] = tminimap_pcx.data[i];
+	}
+	// 19 rows of 8: per player color, the minimap-dot blink cycle for alerts
+	// (blue flash -> player color bright->dark -> off).
+	auto tblink_pcx = load_pcx_file("game/tblink.pcx");
+	if (tblink_pcx.width != 152 || tblink_pcx.height != 1) error("tblink.pcx dimensions are %dx%d (152x1 required)", tblink_pcx.width, tblink_pcx.height);
+	for (size_t i = 0; i != 152; ++i) {
+		img.blink_colors[i] = tblink_pcx.data[i];
 	}
 	auto tselect_pcx = load_pcx_file("game/tselect.pcx");
 	if (tselect_pcx.width != 24 || tselect_pcx.height != 1) error("tselect.pcx dimensions are %dx%d (24x1 required)", tselect_pcx.width, tselect_pcx.height);
