@@ -285,6 +285,7 @@ function wireInput(canvas, x) {
   let vx = 0, vy = 0;   // virtual cursor, canvas coords; seeded from the real mouse
   const locked = () => document.pointerLockElement === canvas;
   wireInput.lockWanted = false;   // set by the settings wiring in boot()
+  wireInput.cursorPos = () => [vx | 0, vy | 0];   // for the native cursor overlay
   canvas.addEventListener('click', () => {
     if ((wireInput.lockWanted || document.fullscreenElement) && !locked()) canvas.requestPointerLock();
   });
@@ -304,6 +305,18 @@ function wireInput(canvas, x) {
     vx = p[0]; vy = p[1];   // keep the virtual cursor seeded for a seamless lock engage
     return p;
   };
+  // Under lock every mouse event lands on the canvas, so DOM UI (top-left icons,
+  // command card, wireframes, menus) would be unreachable and the engine would eat
+  // clicks meant for it. Hit-test the virtual cursor: if it sits over a DOM element,
+  // route the click there instead of into the game.
+  const domUnderCursor = () => {
+    if (!locked()) return null;
+    const r = canvas.getBoundingClientRect();
+    const el = document.elementFromPoint(r.left + vx * r.width / canvas.width,
+                                         r.top + vy * r.height / canvas.height);
+    return el && el !== canvas ? el : null;
+  };
+  let domDownEl = null;
   canvas.addEventListener('mousemove', (e) => {
     if (locked()) {
       const r = canvas.getBoundingClientRect();
@@ -317,9 +330,18 @@ function wireInput(canvas, x) {
   // Park the cursor off-screen when it leaves the canvas so edge-scrolling stops.
   canvas.addEventListener('mouseleave', () => { if (!locked()) x.openbw_mouse_move(-1, -1); });
   canvas.addEventListener('mousedown', (e) => {
+    domDownEl = domUnderCursor();
+    if (domDownEl) return;   // press belongs to the DOM UI, not the game
     syncMods(e); const [px, py] = pos(e); x.openbw_mouse_button(1, sdlButton(e.button), px, py, e.detail || 1);
   });
   window.addEventListener('mouseup', (e) => {
+    if (domDownEl) {
+      // Complete the DOM click if the release is still over the pressed element.
+      const el = domUnderCursor();
+      if (el && (el === domDownEl || domDownEl.contains(el))) domDownEl.click();
+      domDownEl = null;
+      return;
+    }
     syncMods(e); const [px, py] = pos(e); x.openbw_mouse_button(0, sdlButton(e.button), px, py, e.detail || 1);
   });
   canvas.addEventListener('contextmenu', (e) => e.preventDefault());
@@ -354,17 +376,34 @@ function wireInput(canvas, x) {
   window.addEventListener('keyup', key(false));
 
   // Trackpad / wheel scrolling pans the camera; pinch (Ctrl+wheel) zooms the view.
-  let zoomTimer = 0;
+  // The zoom renders the engine at window/zoom and lets the pixelated CSS upscale
+  // do the rest; 1x (native, the default) is the floor — never more zoomed out.
+  // The engine keeps the minimap at constant size via the view scale.
+  let zoomTimer = 0, lastZoomApply = 0, appliedZoom = zoom;
+  const applyZoom = () => {
+    zoomTimer = 0;
+    lastZoomApply = performance.now();
+    const k = appliedZoom / zoom;
+    if (k === 1) return;
+    appliedZoom = zoom;
+    if (x.openbw_set_view_scale) x.openbw_set_view_scale(zoom);
+    x.openbw_resize(...winSize());
+    // Zoom towards the cursor: the resize keeps the camera's top-left corner, so
+    // pan by the cursor's shift to keep the map point under it fixed (the engine
+    // clamps at map edges). The virtual cursor keeps its on-screen spot.
+    x.openbw_pan(Math.round(vx * (1 - k)), Math.round(vy * (1 - k)));
+    vx *= k; vy *= k;
+    x.openbw_mouse_move(vx | 0, vy | 0);
+  };
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
     if (e.ctrlKey || e.metaKey) {
-      // Zoom in by rendering the engine at window/zoom and letting the pixelated
-      // CSS upscale do the rest. 1x (native, the default) is the floor — never
-      // more zoomed out than that.
       zoom = Math.min(3, Math.max(1, zoom * Math.exp(-e.deltaY * 0.01)));
       try { localStorage.setItem('openbw-zoom', zoom.toFixed(2)); } catch {}
-      clearTimeout(zoomTimer);
-      zoomTimer = setTimeout(() => x.openbw_resize(...winSize()), 80);
+      // Throttle to ~30ms so a pinch tracks continuously without a resize per event.
+      const since = performance.now() - lastZoomApply;
+      if (since >= 30) applyZoom();
+      else if (!zoomTimer) zoomTimer = setTimeout(applyZoom, 30 - since);
       return;
     }
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
@@ -712,6 +751,10 @@ async function boot(session) {
     bot2 = { slot: session.bot2.slot };
   }
   wireInput(canvas, x);
+  // View zoom + native cursor overlay (feature-detected: a stale module falls back
+  // to the engine-drawn cursor and a zoom-scaled minimap).
+  if (x.openbw_set_view_scale) x.openbw_set_view_scale(zoom);
+  if (x.openbw_set_external_cursor && x.openbw_cursor_rgba) x.openbw_set_external_cursor(1);
 
   // Settings popup (⚙, top-left). Order/rally lines are off by default; the choice
   // persists. Wired here because it drives the wasm, which is now instantiated.
@@ -739,6 +782,16 @@ async function boot(session) {
     try { localStorage.setItem('openbw-mouselock', optLock.checked ? '1' : '0'); } catch {}
     if (!optLock.checked && document.pointerLockElement) document.exitPointerLock();
   };
+  // Esc releases the pointer lock; reflect that in the checkbox so it doesn't stay
+  // ticked (and silently re-engage on the next click). Fullscreen's automatic lock
+  // is independent of the checkbox and doesn't count.
+  document.addEventListener('pointerlockchange', () => {
+    if (!document.pointerLockElement && optLock.checked && !document.fullscreenElement) {
+      optLock.checked = false;
+      wireInput.lockWanted = false;
+      try { localStorage.setItem('openbw-mouselock', '0'); } catch {}
+    }
+  });
   const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen().catch(() => {});
@@ -1466,6 +1519,35 @@ async function boot(session) {
     if (canvas.style.cursor !== 'none') canvas.style.cursor = 'none';
   };
 
+  // Native-resolution cursor overlay: the engine rasterizes the current BW cursor
+  // frame (RGBA, hotspot = box centre) and we draw it in a fixed-size element above
+  // everything — constant size at any zoom, and visible over the DOM HUD under
+  // pointer lock. Null RGBA (cursor parked / assets missing) hides it, which also
+  // covers hovering the HUD unlocked: the canvas mouseleave parks the engine cursor.
+  let curCanvas = null, curCtx = null, curImg = null, curBox = 0;
+  if (x.openbw_cursor_rgba) {
+    curBox = x.openbw_cursor_box();
+    curCanvas = document.createElement('canvas');
+    curCanvas.width = curBox; curCanvas.height = curBox;
+    curCanvas.style.cssText = 'position:fixed;left:0;top:0;width:' + curBox + 'px;height:' + curBox +
+      'px;pointer-events:none;z-index:1000;image-rendering:pixelated;display:none';
+    document.body.appendChild(curCanvas);
+    curCtx = curCanvas.getContext('2d');
+    curImg = curCtx.createImageData(curBox, curBox);
+  }
+  const updateCursorOverlay = () => {
+    if (!curCanvas) return;
+    const ptr = x.openbw_cursor_rgba();
+    if (!ptr) { curCanvas.style.display = 'none'; return; }
+    curImg.data.set(new Uint8Array(memory.buffer, ptr, curBox * curBox * 4));
+    curCtx.putImageData(curImg, 0, 0);
+    const [px, py] = wireInput.cursorPos();
+    const r = canvas.getBoundingClientRect();
+    const cx = r.left + px * r.width / canvas.width, cy = r.top + py * r.height / canvas.height;
+    curCanvas.style.transform = 'translate(' + (cx - curBox / 2) + 'px,' + (cy - curBox / 2) + 'px)';
+    curCanvas.style.display = 'block';
+  };
+
   function frame() {
     x.openbw_render(performance.now());
     const w = x.openbw_framebuffer_width(), h = x.openbw_framebuffer_height(), ptr = x.openbw_framebuffer();
@@ -1481,6 +1563,7 @@ async function boot(session) {
     updateError();
     updateMessages();
     updateCursor();
+    updateCursorOverlay();
     requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);

@@ -2291,7 +2291,13 @@ struct play_ui : ui_functions {
 		ui_functions::draw_minimap(data, data_pitch);
 		if (alerts.empty()) return;
 		rect area = get_minimap_area();
-		if (area.from == area.to || (size_t)(area.to.x - area.from.x) != game_st.map_tile_width) return;
+		size_t mw = area.to.x - area.from.x, mh = area.to.y - area.from.y;
+		size_t tw = game_st.map_tile_width, th = game_st.map_tile_height;
+		if (!mw || !mh || area.from == area.to) return;
+		// Map px -> minimap px under the current minimap_scale.
+		auto mini = [&](xy p) {
+			return area.from + xy((int)((size_t)(p.x / 32) * mw / tw), (int)((size_t)(p.y / 32) * mh / th));
+		};
 		if (ping_col[0] < 0) {
 			ping_col[0] = nearest_palette_color(48, 200, 64);
 			ping_col[1] = nearest_palette_color(24, 100, 32);
@@ -2320,9 +2326,11 @@ struct play_ui : ui_functions {
 				}
 				if (w < 2) w = 2;
 				if (h < 2) h = 2;
-				dot.from = area.from + (a.pos - u->unit_type->placement_size / 2) / 32u;
+				w = std::max<size_t>(1, w * mw / tw);
+				h = std::max<size_t>(1, h * mh / th);
+				dot.from = mini(a.pos - u->unit_type->placement_size / 2);
 			} else {
-				dot.from = area.from + a.pos / 32u - xy(1, 1);
+				dot.from = mini(a.pos) - xy(1, 1);
 			}
 			dot.to = dot.from + xy((int)w, (int)h);
 			int t = ALERT_TTL - a.ttl;
@@ -2334,7 +2342,7 @@ struct play_ui : ui_functions {
 			}
 			uint8_t bright = (uint8_t)ping_col[a.kind ? 2 : 0];
 			uint8_t dark = (uint8_t)ping_col[a.kind ? 3 : 1];
-			xy c = area.from + a.pos / 32u;
+			xy c = mini(a.pos);
 			rect box = {c - xy(PING_HALF, PING_HALF), c + xy(PING_HALF + 1, PING_HALF + 1)};
 			if (t < PING_CONV) {
 				// Four comets: a 2px bright leading bar, a 2px gap, a 2px dark trail,
@@ -2390,10 +2398,9 @@ struct play_ui : ui_functions {
 		cur.ok = !cur.arrow.frames.empty();
 	}
 
-	void draw_bw_cursor(uint8_t* data, size_t pitch) {
-		if (mouse_x < 0 || mouse_y < 0) return;   // parked: the cursor left the canvas
-		load_cursors();
-		if (!cur.ok) return;
+	// Choose the cursor GRP for the current pointer state (arrow, edge-scroll,
+	// drag-select, hover circles, targeting crosshairs).
+	grp_t* pick_cursor() {
 		grp_t* g = &cur.arrow;
 		if (edge_dir) g = &cur.scroll[(edge_dir - 1) & 7];
 		else if (is_drag_selecting) g = &cur.drag;
@@ -2407,6 +2414,51 @@ struct play_ui : ui_functions {
 			if (targeting) g = hc < 0 ? &cur.targ[3] : &cur.targ[hc];
 			else if (!pending_build && hc >= 0) g = &cur.mag[hc];
 		}
+		return g;
+	}
+
+	// External cursor: the host draws the BW cursor in a native-resolution overlay
+	// so view zoom doesn't scale it and it rides above the DOM HUD under pointer
+	// lock. When on, the engine stops compositing the cursor into the frame.
+	bool external_cursor = false;
+	a_vector<uint8_t> cursor_idx_buf, cursor_rgba_buf;
+	// Rasterize the current cursor frame into an RGBA box (hotspot = box centre).
+	// Returns null when the cursor is parked or assets are missing.
+	const uint8_t* cursor_rgba() {
+		if (mouse_x < 0 || mouse_y < 0) return nullptr;
+		load_cursors();
+		if (!cur.ok) return nullptr;
+		grp_t* g = pick_cursor();
+		if (g->frames.empty()) return nullptr;
+		auto& frame = g->frames[(size_t)(ui_now / 100) % g->frames.size()];
+		size_t B = cursor_box();
+		cursor_idx_buf.assign(B * B, 0);
+		size_t fw = frame.size.x, fh = frame.size.y;
+		size_t ox = frame.offset.x, oy = frame.offset.y;
+		if (ox + fw > B || oy + fh > B) return nullptr;
+		draw_frame(frame, false, cursor_idx_buf.data() + oy * B + ox, B, 0, 0, fw, fh,
+		           [](uint8_t v, uint8_t) { return v; });
+		cursor_rgba_buf.assign(B * B * 4, 0);
+		const auto& wpe = tileset_img.wpe;
+		for (size_t i = 0; i != B * B; ++i) {
+			uint8_t c = cursor_idx_buf[i];
+			if (!c) continue;   // transparent
+			uint8_t* o = &cursor_rgba_buf[i * 4];
+			o[0] = wpe[4 * c + 0]; o[1] = wpe[4 * c + 1]; o[2] = wpe[4 * c + 2]; o[3] = 255;
+		}
+		return cursor_rgba_buf.data();
+	}
+	size_t cursor_box() {
+		load_cursors();
+		return cur.ok ? (size_t)cur.arrow.width : 128;
+	}
+
+	void draw_bw_cursor(uint8_t* data, size_t pitch) {
+		if (external_cursor) return;   // the host overlay draws it
+		if (mouse_x < 0 || mouse_y < 0) return;   // parked: the cursor left the canvas
+		load_cursors();
+		if (!cur.ok) return;
+		grp_t* g = pick_cursor();
 		if (g->frames.empty()) return;
 		auto& frame = g->frames[(size_t)(ui_now / 100) % g->frames.size()];
 		// Hotspot = the GRP box centre for every cursor: the art is authored inside a

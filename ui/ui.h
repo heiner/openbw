@@ -1559,6 +1559,10 @@ struct ui_functions: ui_util_functions {
 		} else if (game_st.map_height < game_st.map_width) {
 			minimap_height = minimap_height * minimap_height * game_st.map_tile_height / (minimap_width* game_st.map_tile_width);
 		}
+		if (minimap_scale > 1) {
+			minimap_width = (size_t)(minimap_width / minimap_scale + 0.5);
+			minimap_height = (size_t)(minimap_height / minimap_scale + 0.5);
+		}
 		if (screen_width < minimap_width || screen_height < minimap_height) return {};
 		int map_screen_x = 4;
 		int map_screen_y = screen_height - 4 - minimap_height;
@@ -1569,27 +1573,33 @@ struct ui_functions: ui_util_functions {
 	}
 
 	bool minimap_terrain = true;
+	// View zoom: the host renders the frame at window/zoom and upscales, so the
+	// minimap is drawn at 1/scale to come out at a constant on-screen size. The
+	// click mappings (move_minimap etc.) are ratio-based and adapt automatically.
+	double minimap_scale = 1;
 
 	virtual void draw_minimap(uint8_t* data, size_t data_pitch) {
 		auto area = get_minimap_area();
-		size_t minimap_width = area.to.x - area.from.x;
-		size_t minimap_height = area.to.y - area.from.y;
-		if (minimap_width != game_st.map_tile_width) return;
-		if (minimap_height != game_st.map_tile_height) return;
+		size_t mw = area.to.x - area.from.x;
+		size_t mh = area.to.y - area.from.y;
+		size_t tw = game_st.map_tile_width, th = game_st.map_tile_height;
+		if (!mw || !mh || area.from == area.to) return;
 		fill_rectangle(data, data_pitch, area, 0);
 		line_rectangle(data, data_pitch, {area.from - xy(1, 1), area.to + xy(1, 1)}, (uint8_t)tileset_img.minimap_border_color);
 
 		uint8_t* p = data + data_pitch * (size_t)area.from.y + (size_t)area.from.x;
 
-		size_t pitch = data_pitch - game_st.map_tile_width;
+		size_t pitch = data_pitch - mw;
 		uint8_t fog_mask = fog_player >= 0 ? (uint8_t)(1 << fog_player) : 0;
-		for (size_t y = 0; y != game_st.map_tile_height; ++y) {
-			for (size_t x = 0; x != game_st.map_tile_width; ++x) {
+		for (size_t y = 0; y != mh; ++y) {
+			size_t ty = y * th / mh;
+			for (size_t x = 0; x != mw; ++x) {
+				size_t tx = x * tw / mw;
 				uint8_t out;
 				if (minimap_terrain) {
 					size_t index;
-					if (~st.tiles[y * game_st.map_tile_width + x].flags & tile_t::flag_has_creep) index = st.tiles_mega_tile_index[y * game_st.map_tile_width + x];
-					else index = game_st.cv5.at(1).mega_tile_index[creep_random_tile_indices[y * game_st.map_tile_width + x]];
+					if (~st.tiles[ty * tw + tx].flags & tile_t::flag_has_creep) index = st.tiles_mega_tile_index[ty * tw + tx];
+					else index = game_st.cv5.at(1).mega_tile_index[creep_random_tile_indices[ty * tw + tx]];
 					auto* images = &tileset_img.vx4.at(index).images[0];
 					auto* bitmap = &tileset_img.vr4.at(*images / 2).bitmap[0];
 					auto val = bitmap[55 / sizeof(vr4_entry::bitmap_t)];
@@ -1600,7 +1610,7 @@ struct ui_functions: ui_util_functions {
 					out = (uint8_t)tileset_img.minimap_flat_color;
 				}
 				if (fog_player >= 0)
-					out = tileset_img.dark_pcx.data[256 * fog_tile_level((int)x, (int)y, fog_mask) + out];
+					out = tileset_img.dark_pcx.data[256 * fog_tile_level((int)tx, (int)ty, fog_mask) + out];
 				*p++ = out;
 			}
 			p += pitch;
@@ -1623,16 +1633,20 @@ struct ui_functions: ui_util_functions {
 				}
 				if (w < 2) w = 2;
 				if (h < 2) h = 2;
+				w = std::max<size_t>(1, w * mw / tw);
+				h = std::max<size_t>(1, h * mh / th);
+				xy tp = (u->sprite->position - u->unit_type->placement_size / 2) / 32u;
 				rect unit_area;
-				unit_area.from = area.from + (u->sprite->position - u->unit_type->placement_size / 2) / 32u;
+				unit_area.from = area.from + xy((int)((size_t)tp.x * mw / tw), (int)((size_t)tp.y * mh / th));
 				unit_area.to = unit_area.from + xy(w, h);
 				fill_rectangle(data, data_pitch, unit_area, color);
 			}
 		}
 
 		rect view_rect;
-		view_rect.from = area.from + xy(screen_pos.x / 32u, screen_pos.y / 32u);
-		view_rect.to = view_rect.from + xy((view_width + 31) / 32u, (view_height + 31) / 32u);
+		view_rect.from = area.from + xy((int)((size_t)(screen_pos.x / 32u) * mw / tw), (int)((size_t)(screen_pos.y / 32u) * mh / th));
+		view_rect.to = view_rect.from + xy(std::max<size_t>(1, (size_t)((view_width + 31) / 32u) * mw / tw),
+		                                   std::max<size_t>(1, (size_t)((view_height + 31) / 32u) * mh / th));
 		line_rectangle(data, data_pitch, view_rect, 255);
 
 	}

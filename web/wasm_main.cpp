@@ -244,6 +244,14 @@ OPENBW_EXPORT(openbw_wires) const char* openbw_wires() { return g_ui ? g_ui->wir
 OPENBW_EXPORT(openbw_wire_rgba) const uint8_t* openbw_wire_rgba(int i) { return g_ui ? g_ui->render_wireframe((size_t)i) : nullptr; }
 OPENBW_EXPORT(openbw_wire_box) int openbw_wire_box() { return g_ui ? g_ui->wire_box() : 32; }
 
+// External cursor + view zoom support: the host renders the frame at window/zoom
+// and upscales; the cursor is drawn in a native-resolution host overlay and the
+// engine draws the minimap at 1/scale so both keep a constant on-screen size.
+OPENBW_EXPORT(openbw_cursor_rgba) const uint8_t* openbw_cursor_rgba() { return g_ui ? g_ui->cursor_rgba() : nullptr; }
+OPENBW_EXPORT(openbw_cursor_box) int openbw_cursor_box() { return g_ui ? (int)g_ui->cursor_box() : 128; }
+OPENBW_EXPORT(openbw_set_external_cursor) void openbw_set_external_cursor(int on) { if (g_ui) g_ui->external_cursor = on != 0; }
+OPENBW_EXPORT(openbw_set_view_scale) void openbw_set_view_scale(double s) { if (g_ui) g_ui->minimap_scale = s >= 1 ? s : 1; }
+
 // Debug JS API for console/automation testing: list units, select by id (see sandbox.h).
 OPENBW_EXPORT(openbw_debug_units) const char* openbw_debug_units() { return g_ui ? g_ui->debug_units() : ""; }
 OPENBW_EXPORT(openbw_debug_select) void openbw_debug_select(int id, int add) { if (g_ui) g_ui->debug_select(id, add); }
