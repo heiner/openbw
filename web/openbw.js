@@ -1204,6 +1204,7 @@ async function boot(session) {
         // Big single frame displays 1:1 (64px): its 1px lines decimate badly below native
         // size under pixelated scaling. Group tiles get a slight upscale.
         c.style.width = c.style.height = (box === 64 ? 64 : 38) + 'px';
+        if (box === 64) c.className = 'big';   // padded background around the single big frame
         c.dataset.id = r[0];
         c.onclick = () => x.openbw_debug_select(+c.dataset.id, 0);   // click = select just this unit
         wiresEl.appendChild(c);

@@ -43,15 +43,17 @@
   #hud { position: fixed; right: 8px; bottom: 8px; z-index: 4; display: flex; flex-direction: column;
     align-items: flex-end; gap: 8px; max-width: 72vw; pointer-events: none; }
   #card { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; justify-content: flex-end;
-    padding: 6px 10px; border-radius: 8px;
+    min-height: 26px; padding: 6px 10px; border-radius: 8px;
     background: rgba(0,0,0,.5); font: 13px system-ui, sans-serif; color: #cbd5e1; pointer-events: none; }
   #card:empty { display: none; }
   /* Selection wireframes above the command card: group tiles, or the single big frame.
      Same translucent treatment as the resource HUD (no box, just a dark wash). */
-  #wires { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap; }
+  #wires { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap;
+    min-height: 88px; align-items: flex-end; }
   #wires:empty { display: none; }
   #wires canvas { width: 38px; height: 38px; image-rendering: pixelated; cursor: pointer;
     background: rgba(0,0,0,.5); border-radius: 6px; }
+  #wires canvas.big { padding: 12px; border-radius: 10px; }
   #wires canvas:hover { outline: 1px solid #38bdf8; }
   #card .title { font-weight: 700; color: #e2e8f0; margin-right: 4px; }
   #card .fx { color: #e879f9; font-weight: 600; }   /* status effects: blind, parasite, ensnare, … */
@@ -85,10 +87,12 @@
   #card .cmd b { color: #38bdf8; }
   #card .cmd.off { opacity: .38; }
   #card .cmd.off b { color: #64748b; }
-  #status { display: flex; gap: 6px; align-items: center;
+  #status { display: flex; gap: 6px; align-items: center; min-height: 23px;
     justify-content: flex-end; padding: 5px 10px; border-radius: 8px; background: rgba(0,0,0,.5);
     color: #cbd5e1; font: 13px system-ui, sans-serif; pointer-events: none; }
-  #status:empty { display: none; }
+  /* Empty status still reserves its row (invisible), so the HUD stack height — and the
+     wireframe above it — stays put when selections change between producers and others. */
+  #status:empty { background: none; }
   #status .bar { display: block; width: 68px; height: 6px; image-rendering: pixelated;
     border: 1px solid #2f6d86; border-radius: 3px; }
   #status .q { background: rgba(30,41,59,.9); border-radius: 5px; padding: 2px 8px; white-space: nowrap;
