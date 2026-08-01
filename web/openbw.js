@@ -262,6 +262,13 @@ const SCANCODE = {
 let altEsc = '';
 try { altEsc = localStorage.getItem('openbw-alt-esc') || ''; } catch {}
 
+// View zoom: the engine renders at window/zoom and CSS upscales the canvas
+// (image-rendering: pixelated). 1x = native resolution, the default and minimum;
+// zooming in gives bigger, chunkier OG-style pixels. Pinch / Ctrl+wheel adjusts it.
+let zoom = 1;
+try { zoom = Math.min(3, Math.max(1, parseFloat(localStorage.getItem('openbw-zoom')) || 1)); } catch {}
+const winSize = () => [Math.max(320, (window.innerWidth / zoom) | 0), Math.max(240, (window.innerHeight / zoom) | 0)];
+
 function wireInput(canvas, x) {
   const xy = (e) => {
     const r = canvas.getBoundingClientRect();
@@ -346,9 +353,20 @@ function wireInput(canvas, x) {
   window.addEventListener('keydown', key(true));
   window.addEventListener('keyup', key(false));
 
-  // Trackpad / wheel scrolling pans the camera.
+  // Trackpad / wheel scrolling pans the camera; pinch (Ctrl+wheel) zooms the view.
+  let zoomTimer = 0;
   canvas.addEventListener('wheel', (e) => {
     e.preventDefault();
+    if (e.ctrlKey || e.metaKey) {
+      // Zoom in by rendering the engine at window/zoom and letting the pixelated
+      // CSS upscale do the rest. 1x (native, the default) is the floor — never
+      // more zoomed out than that.
+      zoom = Math.min(3, Math.max(1, zoom * Math.exp(-e.deltaY * 0.01)));
+      try { localStorage.setItem('openbw-zoom', zoom.toFixed(2)); } catch {}
+      clearTimeout(zoomTimer);
+      zoomTimer = setTimeout(() => x.openbw_resize(...winSize()), 80);
+      return;
+    }
     const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? canvas.height : 1;
     x.openbw_pan(Math.round(e.deltaX * scale), Math.round(e.deltaY * scale));
   }, { passive: false });
@@ -666,7 +684,6 @@ async function boot(session) {
 
   const canvas = $('screen');
   const ctx = canvas.getContext('2d');
-  const winSize = () => [Math.max(320, window.innerWidth | 0), Math.max(240, window.innerHeight | 0)];
 
   hb('boot:engine-init');
   x._initialize();
