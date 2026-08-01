@@ -41,8 +41,9 @@ const MPQS = [
 // it renders cleanly, whereas OpenBW leaves black gaps on some maps.
 const BWDB = 'https://raw.githubusercontent.com/Lucifirius/bwmapdb/master/F0%20-%20Melee/';
 const MAPS = [
-  // Lost Temple first: THE classic SC melee map, bundled locally, and the default.
-  { name: 'Lost Temple',      file: './maps/(4)Lost Temple.scm',                    starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
+  // Lost Temple first: THE classic SC melee map and the default — streamed from
+  // bwmapdb like the other Blizzard/pro maps (never bundled in this repo).
+  { name: 'Lost Temple',      file: BWDB + '(4)Lost%20Temple.scm',                  starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
   { name: 'Weave',            file: './maps/Weave_v1.scx',                          starts: 4, w: 64,  h: 64,  tileset: 'Desert'   },
   { name: 'Python',           file: BWDB + '~Pro/(4)Python1.3.scx',                 starts: 4, w: 128, h: 128, tileset: 'Jungle'   },
   { name: 'Luna',             file: BWDB + '~Pro/(4)Luna%20The%20Final%20PGT.scx',  starts: 4, w: 128, h: 128, tileset: 'Twilight' },
