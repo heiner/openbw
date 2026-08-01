@@ -752,6 +752,7 @@ async function boot(session) {
     $('dbg-victory').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(1); };
     $('dbg-defeat').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_outcome(2); };
     $('dbg-resources').onclick = () => { settingsPop.style.display = 'none'; x.openbw_debug_resources(2000, 1000); };
+    $('dbg-reveal').onclick = () => { settingsPop.style.display = 'none'; x.openbw_reveal_map(); };
     // Not while spectating: a cheat mutates only the rendered replica, desyncing the shadow.
     debugResourcesPending = !session.spectate;   // start rich; applied after the first step sets the melee start
   }
