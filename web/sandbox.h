@@ -314,6 +314,7 @@ struct play_ui : ui_functions {
 	int ping_col[4] = { -1, -1, -1, -1 };         // lazy: green bright/dark, red bright/dark
 	xy last_event_pos; bool have_last_event = false;   // Space recenters here
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
+	a_unordered_map<uint16_t, uint8_t> last_stim; // per own unit: stim active last frame (its self-damage is no attack)
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
 	bool events_seeded = false;                   // first poll seeds silently (no startup spam)
 	// System message log (eliminations, later chat), shown as fading lines top-left.
@@ -1668,7 +1669,11 @@ struct play_ui : ui_functions {
 			}
 			int life = u->hp.ceil().integer_part() + u->shield_points.integer_part();
 			auto it = last_life.find(id);
-			if (it != last_life.end() && life < it->second && !seeding) add_alert(u);
+			// A freshly popped stim costs its own HP — that's not being under attack.
+			uint8_t stim_now = u->stim_timer ? 1 : 0;
+			uint8_t stim_prev = last_stim[id];
+			last_stim[id] = stim_now;
+			if (it != last_life.end() && life < it->second && !seeding && !(stim_now && !stim_prev)) add_alert(u);
 			last_life[id] = life;
 		}
 		events_seeded = true;
@@ -1802,7 +1807,9 @@ struct play_ui : ui_functions {
 		// ground uses AttackMove directly. AttackDefault + no target resolves to the unit's
 		// attack_move, which is Guard for workers (they'd stand still) — AttackMove moves them.
 		case T_ATTACK: cmd_order(target ? Orders::AttackDefault : Orders::AttackMove, pos, target, q); break;
-		case T_MOVE:   cmd_order(Orders::Move, pos, target, q); break;
+		// Move onto a unit follows it (any unit — chasing an enemy without attacking
+		// is the classic use), as in the original.
+		case T_MOVE:   cmd_order(target ? Orders::Follow : Orders::Move, pos, target, q); break;
 		case T_PATROL: cmd_order(Orders::Patrol, pos, nullptr, q); break;
 		case T_GATHER: cmd_default_order(pos, target, q); break;
 		case T_REPAIR: cmd_order(Orders::Repair, pos, target, q); break;
