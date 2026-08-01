@@ -32,6 +32,7 @@ struct tileset_image_data {
 	grp_t creep_grp;
 	int resource_minimap_color;
 	int minimap_border_color;
+	int minimap_flat_color;
 	std::array<uint8_t, 256> cloak_fade_selector;
 };
 
@@ -263,6 +264,7 @@ void load_tileset_image_data(tileset_image_data& img, size_t tileset_index, load
 	};
 	img.resource_minimap_color = get_nearest_color(0, 255, 255);
 	img.minimap_border_color = get_nearest_color(110, 110, 110);   // subdued gray frame around the minimap
+	img.minimap_flat_color = get_nearest_color(68, 68, 68);        // terrain-off backdrop (Tab toggle)
 
 	for (size_t i = 0; i != 256; ++i) {
 		int r = img.wpe[4 * i + 0];
@@ -1558,6 +1560,8 @@ struct ui_functions: ui_util_functions {
 		return area;
 	}
 
+	bool minimap_terrain = true;
+
 	virtual void draw_minimap(uint8_t* data, size_t data_pitch) {
 		auto area = get_minimap_area();
 		size_t minimap_width = area.to.x - area.from.x;
@@ -1573,15 +1577,20 @@ struct ui_functions: ui_util_functions {
 		uint8_t fog_mask = fog_player >= 0 ? (uint8_t)(1 << fog_player) : 0;
 		for (size_t y = 0; y != game_st.map_tile_height; ++y) {
 			for (size_t x = 0; x != game_st.map_tile_width; ++x) {
-				size_t index;
-				if (~st.tiles[y * game_st.map_tile_width + x].flags & tile_t::flag_has_creep) index = st.tiles_mega_tile_index[y * game_st.map_tile_width + x];
-				else index = game_st.cv5.at(1).mega_tile_index[creep_random_tile_indices[y * game_st.map_tile_width + x]];
-				auto* images = &tileset_img.vx4.at(index).images[0];
-				auto* bitmap = &tileset_img.vr4.at(*images / 2).bitmap[0];
-				auto val = bitmap[55 / sizeof(vr4_entry::bitmap_t)];
-				size_t shift = 8 * (55 % sizeof(vr4_entry::bitmap_t));
-				val >>= shift;
-				uint8_t out = (uint8_t)val;
+				uint8_t out;
+				if (minimap_terrain) {
+					size_t index;
+					if (~st.tiles[y * game_st.map_tile_width + x].flags & tile_t::flag_has_creep) index = st.tiles_mega_tile_index[y * game_st.map_tile_width + x];
+					else index = game_st.cv5.at(1).mega_tile_index[creep_random_tile_indices[y * game_st.map_tile_width + x]];
+					auto* images = &tileset_img.vx4.at(index).images[0];
+					auto* bitmap = &tileset_img.vr4.at(*images / 2).bitmap[0];
+					auto val = bitmap[55 / sizeof(vr4_entry::bitmap_t)];
+					size_t shift = 8 * (55 % sizeof(vr4_entry::bitmap_t));
+					val >>= shift;
+					out = (uint8_t)val;
+				} else {
+					out = (uint8_t)tileset_img.minimap_flat_color;
+				}
 				if (fog_player >= 0)
 					out = tileset_img.dark_pcx.data[256 * fog_tile_level((int)x, (int)y, fog_mask) + out];
 				*p++ = out;

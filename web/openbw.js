@@ -242,7 +242,7 @@ function makeWasi(getMemory) {
 // Input mapping (browser -> SDL-style codes the engine expects)
 // ---------------------------------------------------------------------------
 const SCANCODE = {
-  Escape: 41, Space: 44,
+  Escape: 41, Tab: 43, Space: 44,
   ArrowRight: 79, ArrowLeft: 80, ArrowDown: 81, ArrowUp: 82,
   ControlLeft: 224, ShiftLeft: 225, ControlRight: 228, ShiftRight: 229,
 };

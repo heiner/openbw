@@ -2520,6 +2520,10 @@ struct play_ui : ui_functions {
 			if (have_last_event) center_on(last_event_pos);
 			return true;
 		}
+		if (e.type == ev::type_key_down && e.scancode == 43) {   // Tab: toggle minimap terrain
+			minimap_terrain = !minimap_terrain;
+			return true;
+		}
 		if (e.type == ev::type_key_down && e.sym >= '0' && e.sym <= '9') {
 			int n = e.sym - '0';
 			if (key_ctrl()) assign_group(n); else recall_group(n);
