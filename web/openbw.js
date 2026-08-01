@@ -1360,20 +1360,11 @@ async function boot(session) {
   };
 
   let iw = 0, ih = 0, image = null;
-  // Swap the canvas cursor to match state: while edge-scrolling, a directional resize
-  // arrow pointing the way we're panning; otherwise the pointer mode (0 normal,
-  // 1 targeting, 2 placing).
-  const EDGE_CURSOR = ['', 'n-resize', 'ne-resize', 'e-resize', 'se-resize',
-                       's-resize', 'sw-resize', 'w-resize', 'nw-resize'];
-  // 0 normal, 1 targeting, 2 placing, 3 hover-unit, 4 targeting-over-unit.
-  const MODE_CURSOR = ['default', 'crosshair', 'cell', 'pointer', 'crosshair'];
-  let lastCursor = '';
+  // The engine draws the original BW cursor (animated arrow, hover circles, targeting
+  // crosshairs, edge-scroll arrows) into the frame itself — hide the OS cursor over the
+  // canvas so the two never show at once. This is also what pointer lock needs.
   const updateCursor = () => {
-    const edge = x.openbw_edge();
-    const cur = edge ? EDGE_CURSOR[edge] : (MODE_CURSOR[x.openbw_cursor()] || 'default');
-    if (cur === lastCursor) return;
-    lastCursor = cur;
-    canvas.style.cursor = cur;
+    if (canvas.style.cursor !== 'none') canvas.style.cursor = 'none';
   };
 
   function frame() {

@@ -1608,6 +1608,9 @@ struct play_ui : ui_functions {
 		debug_text += format("fog_player=%d shared_vision=[%x,%x,%x,%x] susp=%d(op%d by %d)\n",
 			fog_player, st.shared_vision[0], st.shared_vision[1], st.shared_vision[2], st.shared_vision[3],
 			susp_count, susp_action, susp_owner);
+		load_cursors();
+		debug_text += format("cursor ok=%d arrow_frames=%d mouse=%d,%d edge=%d\n",
+			(int)cur.ok, (int)cur.arrow.frames.size(), mouse_x, mouse_y, edge_dir);
 		debug_text += format("selection=%d\n", (int)current_selection.size());
 		{   // the sim-side selection (what single-unit actions like build key off)
 			int n = 0; const char* first = "none";
@@ -2294,12 +2297,77 @@ struct play_ui : ui_functions {
 		}
 	}
 
+	// --- The original BW mouse cursors (cursor\*.grp): the animated green arrow, the
+	// rotating hover circles (green own / yellow neutral / red enemy), targeting
+	// crosshairs, the drag cursor, and the eight edge-scroll arrows. Drawn into the
+	// frame at the mouse position (the page hides the CSS cursor over the canvas) —
+	// which also makes the cursor work under pointer lock, where the OS cursor is hidden.
+	struct { grp_t arrow, drag, mag[3], targ[4], scroll[8]; bool loaded = false, ok = false; } cur;
+	void load_cursors() {
+		if (cur.loaded) return;
+		cur.loaded = true;
+		auto ld = [&](grp_t& g, const char* fn) {
+			a_vector<uint8_t> data;
+			load_data_file(data, fn);
+			g = read_grp(data_loading::data_reader_le(data.data(), data.data() + data.size()));
+		};
+		ld(cur.arrow, "cursor\\arrow.grp");
+		ld(cur.drag, "cursor\\drag.grp");
+		ld(cur.mag[0], "cursor\\MagG.grp");
+		ld(cur.mag[1], "cursor\\MagY.grp");
+		ld(cur.mag[2], "cursor\\MagR.grp");
+		ld(cur.targ[0], "cursor\\TargG.grp");
+		ld(cur.targ[1], "cursor\\TargY.grp");
+		ld(cur.targ[2], "cursor\\TargR.grp");
+		ld(cur.targ[3], "cursor\\TargN.grp");
+		static const char* sc[8] = { "cursor\\ScrollU.grp", "cursor\\ScrollUR.grp",
+			"cursor\\ScrollR.grp", "cursor\\ScrollDR.grp", "cursor\\ScrollD.grp",
+			"cursor\\ScrollDL.grp", "cursor\\ScrollL.grp", "cursor\\ScrollUL.grp" };
+		for (int i = 0; i != 8; ++i) ld(cur.scroll[i], sc[i]);
+		cur.ok = !cur.arrow.frames.empty();
+	}
+
+	void draw_bw_cursor(uint8_t* data, size_t pitch) {
+		if (mouse_x < 0 || mouse_y < 0) return;   // parked: the cursor left the canvas
+		load_cursors();
+		if (!cur.ok) return;
+		grp_t* g = &cur.arrow;
+		if (edge_dir) g = &cur.scroll[(edge_dir - 1) & 7];
+		else if (is_drag_selecting) g = &cur.drag;
+		else {
+			unit_t* h = select_get_unit_at(screen_to_map(mouse_x, mouse_y));
+			if (h && unit_hidden_by_fog(h)) h = nullptr;
+			// hover class: 0 own (green), 1 neutral/ally/resource (yellow), 2 enemy (red)
+			int hc = !h ? -1
+			       : h->owner == my_player ? 0
+			       : (h->owner < 8 && !st.alliances[my_player][h->owner]) ? 2 : 1;
+			if (targeting) g = hc < 0 ? &cur.targ[3] : &cur.targ[hc];
+			else if (!pending_build && hc >= 0) g = &cur.mag[hc];
+		}
+		if (g->frames.empty()) return;
+		auto& frame = g->frames[(size_t)(ui_now / 100) % g->frames.size()];
+		// Hotspot: the arrow points with its tip (GRP box top-left); everything else
+		// (circles, crosshairs, scroll arrows) is centred on the mouse.
+		bool tip = g == &cur.arrow;
+		int sx = mouse_x - (tip ? 0 : (int)g->width / 2) + (int)frame.offset.x;
+		int sy = mouse_y - (tip ? 0 : (int)g->height / 2) + (int)frame.offset.y;
+		if (sx >= (int)screen_width || sy >= (int)screen_height) return;
+		size_t w = frame.size.x, h = frame.size.y;
+		if (sx + (int)w <= 0 || sy + (int)h <= 0) return;
+		size_t ox = sx < 0 ? (size_t)-sx : 0, oy = sy < 0 ? (size_t)-sy : 0;
+		uint8_t* dst = data + sy * pitch + sx;
+		w = std::min(w, screen_width - sx);
+		h = std::min(h, screen_height - sy);
+		draw_frame(frame, false, dst, pitch, ox, oy, w, h, [](uint8_t v, uint8_t) { return v; });
+	}
+
 	// Placement preview: a faded, tinted silhouette of the actual building, plus a
 	// footprint outline so the exact tiles it will occupy are unambiguous.
 	void draw_callback(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_callback(data, data_pitch);
 		draw_order_lines(data, data_pitch);
 		draw_cursor_marker(data, data_pitch);   // the ring is drawn in draw_sprite (occluded by the unit)
+		draw_bw_cursor(data, data_pitch);
 
 		if (!pending_build) return;
 		if (place_ok_color < 0) {
