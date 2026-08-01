@@ -309,8 +309,9 @@ struct play_ui : ui_functions {
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
 	int event_tick = 0;                           // local tick for the flash blink phase
 	static const int ALERT_TTL = 90;              // ~4 s of dot blinking
-	struct alert_t { unit_id unit; xy pos; int ttl; };
+	struct alert_t { unit_id unit; xy pos; int ttl; int kind; };   // kind: 0 ready, 1 under attack
 	a_vector<alert_t> alerts;                     // units whose minimap dot is blinking
+	int ping_col[4] = { -1, -1, -1, -1 };         // lazy: green bright/dark, red bright/dark
 	xy last_event_pos; bool have_last_event = false;   // Space recenters here
 	a_unordered_map<uint16_t, int> last_life;     // per own unit: last hp+shields, to spot damage
 	a_unordered_set<uint16_t> announced;          // own units whose ready sound has fired
@@ -1500,16 +1501,16 @@ struct play_ui : ui_functions {
 		}
 	}
 	// Blink a unit's minimap dot, as the original does for completions and hits.
-	void ping_minimap(unit_t* u) {
+	void ping_minimap(unit_t* u, int kind) {
 		have_last_event = true; last_event_pos = u->sprite->position;   // Space recenters here
 		for (auto& a : alerts)
-			if (a.unit == get_unit_id(u)) { a.ttl = ALERT_TTL; return; }
-		if (alerts.size() < 32) alerts.push_back({get_unit_id(u), u->sprite->position, ALERT_TTL});
+			if (a.unit == get_unit_id(u)) { a.ttl = ALERT_TTL; a.kind = kind; return; }
+		if (alerts.size() < 32) alerts.push_back({get_unit_id(u), u->sprite->position, ALERT_TTL, kind});
 	}
 
 	void add_alert(unit_t* u) {
 		xy pos = u->sprite->position;
-		ping_minimap(u);
+		ping_minimap(u, 1);
 		// Voice: quiet while the fight is already on screen (as the original is), and a
 		// long gap between announcements.
 		bool on_screen = pos.x >= screen_pos.x && pos.y >= screen_pos.y &&
@@ -1660,7 +1661,7 @@ struct play_ui : ui_functions {
 			uint16_t id = get_unit_id(u).raw_value;
 			if (u_completed(u) && announced.insert(id).second && !seeding && announces_ready(u)) {
 				play_sound(u->unit_type->ready_sound, u->sprite->position, u, false);
-				ping_minimap(u);
+				ping_minimap(u, 0);
 			}
 			int life = u->hp.ceil().integer_part() + u->shield_points.integer_part();
 			auto it = last_life.find(id);
@@ -2272,32 +2273,82 @@ struct play_ui : ui_functions {
 
 	// Minimap with blinking red blips at recent under-attack locations (drawn on top of
 	// the base minimap, which the engine renders after draw_callback).
-	// Minimap ping, exactly like the original: the alerted unit's own dot strobes
-	// through its player color's tblink.pcx cycle (blue flash -> color -> off).
+	// Minimap ping, matched frame-by-frame to the original: from each on-map side a
+	// bright bar with a darker trailing bar sweeps in onto the spot, they land as a
+	// box outline blinking around the unit's dot for a moment, and the dot itself
+	// strobes through its player color's tblink.pcx cycle for the alert's lifetime.
+	// Green for completions, red for under attack.
+	static const int PING_CONV = 12;   // ticks of the bars sweeping in
+	static const int PING_BOX = 24;    // ticks of the landed box blinking
+	static const int PING_DIST = 40;   // minimap px the bars start out from the box
 	void draw_minimap(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_minimap(data, data_pitch);
 		if (alerts.empty()) return;
 		rect area = get_minimap_area();
 		if (area.from == area.to || (size_t)(area.to.x - area.from.x) != game_st.map_tile_width) return;
+		if (ping_col[0] < 0) {
+			ping_col[0] = nearest_palette_color(48, 200, 64);
+			ping_col[1] = nearest_palette_color(24, 100, 32);
+			ping_col[2] = nearest_palette_color(228, 32, 32);
+			ping_col[3] = nearest_palette_color(120, 16, 16);
+		}
+		auto fill = [&](rect r, uint8_t c) {
+			if (r.from.x < area.from.x) r.from.x = area.from.x;
+			if (r.from.y < area.from.y) r.from.y = area.from.y;
+			if (r.to.x > area.to.x) r.to.x = area.to.x;
+			if (r.to.y > area.to.y) r.to.y = area.to.y;
+			if (r.from.x >= r.to.x || r.from.y >= r.to.y) return;
+			fill_rectangle(data, data_pitch, r, c);
+		};
 		for (auto& a : alerts) {
 			unit_t* u = get_unit(a.unit);
-			if (!u || !unit_visble_on_minimap(u) || unit_hidden_by_fog(u)) continue;
-			int step = ((ALERT_TTL - a.ttl) / 3) % 8;
-			size_t crow = (size_t)st.players[u->owner].color;
-			if (crow >= 19) crow = 0;   // tblink.pcx has 19 rows
-			uint8_t color = img.blink_colors[8 * crow + step];
-			size_t w = u->unit_type->placement_size.x / 32u;
-			size_t h = u->unit_type->placement_size.y / 32u;
-			if (ut_building(u)) {
-				if (w > 4) w = 4;
-				if (h > 4) h = 4;
-			}
-			if (w < 2) w = 2;
-			if (h < 2) h = 2;
+			if (u) a.pos = u->sprite->position;   // the ping follows a moving unit
+			size_t w = 2, h = 2;
 			rect dot;
-			dot.from = area.from + (u->sprite->position - u->unit_type->placement_size / 2) / 32u;
+			if (u) {
+				w = u->unit_type->placement_size.x / 32u;
+				h = u->unit_type->placement_size.y / 32u;
+				if (ut_building(u)) {
+					if (w > 4) w = 4;
+					if (h > 4) h = 4;
+				}
+				if (w < 2) w = 2;
+				if (h < 2) h = 2;
+				dot.from = area.from + (a.pos - u->unit_type->placement_size / 2) / 32u;
+			} else {
+				dot.from = area.from + a.pos / 32u - xy(1, 1);
+			}
 			dot.to = dot.from + xy((int)w, (int)h);
-			fill_rectangle(data, data_pitch, dot, color);
+			int t = ALERT_TTL - a.ttl;
+			// The dot strobe (skip while fogged; the sweep still points at the spot).
+			if (u && unit_visble_on_minimap(u) && !unit_hidden_by_fog(u)) {
+				size_t crow = (size_t)st.players[u->owner].color;
+				if (crow >= 19) crow = 0;   // tblink.pcx has 19 rows
+				fill(dot, img.blink_colors[8 * crow + (t / 3) % 8]);
+			}
+			uint8_t bright = (uint8_t)ping_col[a.kind ? 2 : 0];
+			uint8_t dark = (uint8_t)ping_col[a.kind ? 3 : 1];
+			rect box = {dot.from - xy(2, 2), dot.to + xy(2, 2)};
+			if (t < PING_CONV) {
+				// Four comets: a 2px bright leading bar, a 2px gap, a 2px dark trail.
+				int d = PING_DIST - (PING_DIST * t) / PING_CONV;
+				int y0 = box.from.y - 2, y1 = box.to.y + 2;
+				int x0 = box.from.x - 2, x1 = box.to.x + 2;
+				fill({{box.from.x - d - 2, y0}, {box.from.x - d, y1}}, bright);       // from the left
+				fill({{box.from.x - d - 6, y0}, {box.from.x - d - 4, y1}}, dark);
+				fill({{box.to.x + d, y0}, {box.to.x + d + 2, y1}}, bright);           // from the right
+				fill({{box.to.x + d + 4, y0}, {box.to.x + d + 6, y1}}, dark);
+				fill({{x0, box.from.y - d - 2}, {x1, box.from.y - d}}, bright);       // from the top
+				fill({{x0, box.from.y - d - 6}, {x1, box.from.y - d - 4}}, dark);
+				fill({{x0, box.to.y + d}, {x1, box.to.y + d + 2}}, bright);           // from the bottom
+				fill({{x0, box.to.y + d + 4}, {x1, box.to.y + d + 6}}, dark);
+			} else if (t < PING_CONV + PING_BOX) {
+				uint8_t c = ((t / 2) & 1) ? dark : bright;
+				fill({{box.from.x - 2, box.from.y - 2}, {box.to.x + 2, box.from.y}}, c);   // top
+				fill({{box.from.x - 2, box.to.y}, {box.to.x + 2, box.to.y + 2}}, c);       // bottom
+				fill({{box.from.x - 2, box.from.y}, {box.from.x, box.to.y}}, c);           // left
+				fill({{box.to.x, box.from.y}, {box.to.x + 2, box.to.y}}, c);               // right
+			}
 		}
 	}
 
