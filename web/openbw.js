@@ -10,10 +10,15 @@
 // Build id — CI replaces the placeholder with the commit SHA for cache-busting.
 const BUILD = '__BUILD__';
 
+// Any build whose SHA wasn't stamped in by CI is a local/dev build. CI's stamp is a
+// GLOBAL sed of the placeholder, which also rewrites comparisons that spell it out —
+// so test for the placeholder's underscores instead of matching it literally.
+const DEV = BUILD.startsWith('__') || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
+
 // Dev builds swap the favicon to the classic SC icon (prod keeps BW.ICO from the
 // index.html link) so dev tabs are recognizable at a glance. Fetched straight from
 // the Internet Archive, like the MPQs — no Blizzard material in the repo.
-if (BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+if (DEV) {
   const icon = document.querySelector('link[rel="icon"]');
   if (icon) icon.href = 'https://archive.org/download/starcraft_202012/STARCRAFT.ISO/SC.ICO';
 }
@@ -539,7 +544,6 @@ function wireInput(canvas, x) {
 // rendered replica handles sound). Seats the full melee and attaches its bot. Used as the
 // shadow sim for the second bot in a spectated bot-vs-bot — the Lockstep keeps it in sync.
 async function makeBotReplica(assets, moduleName, slots, botSlot, w, h) {
-  const DEV = BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   let memory;
   const env = {
     js_file_size: (i) => assets[i].length,
@@ -713,7 +717,6 @@ async function boot(session) {
   // Any build whose SHA wasn't stamped in by CI is a local/dev build — including one served
   // to a phone over a LAN IP. Treat it as dev so the wasm is fetched fresh (the ?v=__BUILD__
   // cache-buster is a constant locally, so a plain fetch would serve a stale, skewed wasm).
-  const DEV = BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1';
   // BUILD is replaced by CI with the commit SHA (see .github/workflows/pages.yml), so a
   // new deploy fetches a fresh wasm URL instead of a stale cached one. Locally it stays
   // the '__BUILD__' placeholder and we cache-bust per load instead.
