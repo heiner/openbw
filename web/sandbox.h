@@ -308,7 +308,7 @@ struct play_ui : ui_functions {
 	int under_attack_sound = -2;                  // advisor sfx id (-2 = unresolved, -1 = not found)
 	int alert_cooldown = 0;                       // update-ticks until the voice may replay
 	int event_tick = 0;                           // local tick for the flash blink phase
-	static const int ALERT_TTL = 90;              // ~4 s of dot blinking
+	static const int ALERT_TTL = 126;             // full ping: 1.2 s sweep + 0.8 s box, 60 fps ticks
 	struct alert_t { unit_id unit; xy pos; int ttl; int kind; };   // kind: 0 ready, 1 under attack
 	a_vector<alert_t> alerts;                     // units whose minimap dot is blinking
 	int ping_col[4] = { -1, -1, -1, -1 };         // lazy: green bright/dark, red bright/dark
@@ -1611,6 +1611,9 @@ struct play_ui : ui_functions {
 		load_cursors();
 		debug_text += format("cursor ok=%d arrow_frames=%d mouse=%d,%d edge=%d\n",
 			(int)cur.ok, (int)cur.arrow.frames.size(), mouse_x, mouse_y, edge_dir);
+		debug_text += format("alerts=%d", (int)alerts.size());
+		for (auto& a : alerts) debug_text += format(" [ttl=%d kind=%d pos=%d,%d]", a.ttl, a.kind, a.pos.x, a.pos.y);
+		debug_text += "\n";
 		debug_text += format("selection=%d\n", (int)current_selection.size());
 		{   // the sim-side selection (what single-unit actions like build key off)
 			int n = 0; const char* first = "none";
@@ -2273,14 +2276,17 @@ struct play_ui : ui_functions {
 
 	// Minimap with blinking red blips at recent under-attack locations (drawn on top of
 	// the base minimap, which the engine renders after draw_callback).
-	// Minimap ping, matched frame-by-frame to the original: from each on-map side a
-	// bright bar with a darker trailing bar sweeps in onto the spot, they land as a
-	// box outline blinking around the unit's dot for a moment, and the dot itself
-	// strobes through its player color's tblink.pcx cycle for the alert's lifetime.
-	// Green for completions, red for under attack.
-	static const int PING_CONV = 12;   // ticks of the bars sweeping in
-	static const int PING_BOX = 24;    // ticks of the landed box blinking
-	static const int PING_DIST = 40;   // minimap px the bars start out from the box
+	// Minimap ping, matched frame-by-frame to the original (timings measured off a
+	// 60 fps recording): from each on-map side a bright bar with a darker trailing
+	// bar steps in ~4 px every 0.1 s from ~52 px out, lands as a fixed-size box
+	// outline that blinks bright/dark at ~0.2 s for ~0.8 s, and the dot itself
+	// strobes through its player color's tblink.pcx cycle for the ping's lifetime.
+	// Green for completions, red for under attack. Ticks are render frames (60 fps).
+	static const int PING_STEP = 6;      // ticks per 4 px sweep step (0.1 s)
+	static const int PING_NSTEPS = 13;   // sweep steps: starts 52 px out
+	static const int PING_CONV = PING_STEP * PING_NSTEPS;   // 1.2 s sweeping in
+	static const int PING_BOX = 48;      // 0.8 s of the landed box blinking
+	static const int PING_HALF = 8;      // the landed box is a fixed 17 px square
 	void draw_minimap(uint8_t* data, size_t data_pitch) override {
 		ui_functions::draw_minimap(data, data_pitch);
 		if (alerts.empty()) return;
@@ -2324,14 +2330,16 @@ struct play_ui : ui_functions {
 			if (u && unit_visble_on_minimap(u) && !unit_hidden_by_fog(u)) {
 				size_t crow = (size_t)st.players[u->owner].color;
 				if (crow >= 19) crow = 0;   // tblink.pcx has 19 rows
-				fill(dot, img.blink_colors[8 * crow + (t / 3) % 8]);
+				fill(dot, img.blink_colors[8 * crow + (t / 8) % 8]);
 			}
 			uint8_t bright = (uint8_t)ping_col[a.kind ? 2 : 0];
 			uint8_t dark = (uint8_t)ping_col[a.kind ? 3 : 1];
-			rect box = {dot.from - xy(2, 2), dot.to + xy(2, 2)};
+			xy c = area.from + a.pos / 32u;
+			rect box = {c - xy(PING_HALF, PING_HALF), c + xy(PING_HALF + 1, PING_HALF + 1)};
 			if (t < PING_CONV) {
-				// Four comets: a 2px bright leading bar, a 2px gap, a 2px dark trail.
-				int d = PING_DIST - (PING_DIST * t) / PING_CONV;
+				// Four comets: a 2px bright leading bar, a 2px gap, a 2px dark trail,
+				// stepping 4 px closer every PING_STEP ticks.
+				int d = 4 * (PING_NSTEPS - t / PING_STEP);
 				int y0 = box.from.y - 2, y1 = box.to.y + 2;
 				int x0 = box.from.x - 2, x1 = box.to.x + 2;
 				fill({{box.from.x - d - 2, y0}, {box.from.x - d, y1}}, bright);       // from the left
@@ -2343,11 +2351,11 @@ struct play_ui : ui_functions {
 				fill({{x0, box.to.y + d}, {x1, box.to.y + d + 2}}, bright);           // from the bottom
 				fill({{x0, box.to.y + d + 4}, {x1, box.to.y + d + 6}}, dark);
 			} else if (t < PING_CONV + PING_BOX) {
-				uint8_t c = ((t / 2) & 1) ? dark : bright;
-				fill({{box.from.x - 2, box.from.y - 2}, {box.to.x + 2, box.from.y}}, c);   // top
-				fill({{box.from.x - 2, box.to.y}, {box.to.x + 2, box.to.y + 2}}, c);       // bottom
-				fill({{box.from.x - 2, box.from.y}, {box.from.x, box.to.y}}, c);           // left
-				fill({{box.to.x, box.from.y}, {box.to.x + 2, box.to.y}}, c);               // right
+				uint8_t bc = ((t / PING_STEP) & 1) ? dark : bright;
+				fill({{box.from.x - 2, box.from.y - 2}, {box.to.x + 2, box.from.y}}, bc);   // top
+				fill({{box.from.x - 2, box.to.y}, {box.to.x + 2, box.to.y + 2}}, bc);       // bottom
+				fill({{box.from.x - 2, box.from.y}, {box.from.x, box.to.y}}, bc);           // left
+				fill({{box.to.x, box.from.y}, {box.to.x + 2, box.to.y}}, bc);               // right
 			}
 		}
 	}
