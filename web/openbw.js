@@ -10,6 +10,14 @@
 // Build id — CI replaces the placeholder with the commit SHA for cache-busting.
 const BUILD = '__BUILD__';
 
+// Dev builds swap the favicon to the classic SC icon (prod keeps BW.ICO from the
+// index.html link) so dev tabs are recognizable at a glance. Fetched straight from
+// the Internet Archive, like the MPQs — no Blizzard material in the repo.
+if (BUILD === '__BUILD__' || location.hostname === 'localhost' || location.hostname === '127.0.0.1') {
+  const icon = document.querySelector('link[rel="icon"]');
+  if (icon) icon.href = 'https://archive.org/download/starcraft_202012/STARCRAFT.ISO/SC.ICO';
+}
+
 // BOT_LOG (?debug or ?botlog) mirrors a bot's own log output (e.g. McRave's per-frame
 // profiler) into the console.
 const BOT_LOG = /(\?|&)(debug|botlog)\b/.test(location.search);
