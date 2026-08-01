@@ -718,16 +718,16 @@ async function boot(session) {
     else document.documentElement.requestFullscreen().catch(() => {});
   };
   const fsBtn = $('opt-fullscreen');
-  fsBtn.textContent = `Fullscreen (${navigator.platform.startsWith('Mac') ? '\u2318F' : 'Ctrl-F'})`;
+  fsBtn.textContent = `Fullscreen (${navigator.platform.startsWith('Mac') ? '\u2325\u21a9' : 'Alt-Enter'})`;
   fsBtn.onclick = () => {
     settingsPop.style.display = 'none';
     toggleFullscreen();
   };
-  // Cmd-F / Ctrl-F / F11 toggle fullscreen. The game's own key handler already
-  // hands modified keys back to the browser, so this doesn't shadow game binds.
+  // Alt-Enter (the classic PC-game convention) / F11 toggle fullscreen. The game's
+  // own key handler hands modified keys back to the browser, so no game binds shadowed.
   window.addEventListener('keydown', (e) => {
     const combo = e.key === 'F11'
-      || ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F'));
+      || (e.altKey && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.key === 'Enter');
     if (!combo || e.repeat) return;
     e.preventDefault();
     toggleFullscreen();
