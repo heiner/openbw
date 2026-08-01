@@ -718,6 +718,17 @@ async function boot(session) {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen().catch(() => {});
   };
+  // In fullscreen, capture Esc with the Keyboard Lock API (Chromium): a TAP of Esc is
+  // delivered to the game — so Esc keeps working as cancel, and it no longer drops
+  // pointer lock — while HOLDING Esc exits fullscreen (the browser shows the hint).
+  // Browsers without the API keep today's behavior (Esc exits; Alt-Esc covers cancel).
+  document.addEventListener('fullscreenchange', () => {
+    if (document.fullscreenElement) {
+      if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(['Escape']).catch(() => {});
+    } else if (navigator.keyboard && navigator.keyboard.unlock) {
+      navigator.keyboard.unlock();
+    }
+  });
 
   // Alternative Esc key: click the button, press the key to bind (Esc itself clears).
   // Stored as KeyboardEvent.code; the key handler routes it as a full Esc press.
