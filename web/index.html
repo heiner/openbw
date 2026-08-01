@@ -49,11 +49,11 @@
   /* Selection wireframes above the command card: group tiles, or the single big frame.
      Same translucent treatment as the resource HUD (no box, just a dark wash). */
   #wires { display: flex; gap: 3px; justify-content: flex-end; flex-wrap: wrap;
-    min-height: 88px; align-items: flex-end; }
+    min-height: 76px; align-items: flex-end; }
   #wires:empty { display: none; }
   #wires canvas { width: 38px; height: 38px; image-rendering: pixelated; cursor: pointer;
     background: rgba(0,0,0,.5); border-radius: 6px; }
-  #wires canvas.big { padding: 12px; border-radius: 10px; }
+  #wires canvas.big { padding: 6px; border-radius: 10px; }
   #wires canvas:hover { outline: 1px solid #38bdf8; }
   #card .title { font-weight: 700; color: #e2e8f0; margin-right: 4px; }
   #card .fx { color: #e879f9; font-weight: 600; }   /* status effects: blind, parasite, ensnare, … */
