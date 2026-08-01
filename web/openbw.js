@@ -713,11 +713,25 @@ async function boot(session) {
     try { localStorage.setItem('openbw-mouselock', optLock.checked ? '1' : '0'); } catch {}
     if (!optLock.checked && document.pointerLockElement) document.exitPointerLock();
   };
-  $('opt-fullscreen').onclick = () => {
-    settingsPop.style.display = 'none';
+  const toggleFullscreen = () => {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen().catch(() => {});
   };
+  const fsBtn = $('opt-fullscreen');
+  fsBtn.textContent = `Fullscreen (${navigator.platform.startsWith('Mac') ? '\u2318F' : 'Ctrl-F'})`;
+  fsBtn.onclick = () => {
+    settingsPop.style.display = 'none';
+    toggleFullscreen();
+  };
+  // Cmd-F / Ctrl-F / F11 toggle fullscreen. The game's own key handler already
+  // hands modified keys back to the browser, so this doesn't shadow game binds.
+  window.addEventListener('keydown', (e) => {
+    const combo = e.key === 'F11'
+      || ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && (e.key === 'f' || e.key === 'F'));
+    if (!combo || e.repeat) return;
+    e.preventDefault();
+    toggleFullscreen();
+  });
   // In fullscreen, capture Esc with the Keyboard Lock API (Chromium): a TAP of Esc is
   // delivered to the game — so Esc keeps working as cancel, and it no longer drops
   // pointer lock — while HOLDING Esc exits fullscreen (the browser shows the hint).
