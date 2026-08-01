@@ -1250,7 +1250,8 @@ struct play_ui : ui_functions {
 			stat2 += format("Energy %d/%d", sel->energy.integer_part(), unit_max_energy(sel).integer_part()).c_str();
 		}
 		card_text += title;
-		card_text += '\t'; card_text += format("HP %d/%d", hp, maxhp).c_str();
+		card_text += '\t';
+		if (!ut_resource(sel)) card_text += format("HP %d/%d", hp, maxhp).c_str();
 		card_text += '\t'; card_text += stat2.c_str();
 		// Status effects (field 4). Blind and parasite have no in-world overlay sprite, so
 		// this panel line is the only place they're visible; the rest also draw on the unit
@@ -1782,8 +1783,10 @@ struct play_ui : ui_functions {
 	void issue_target(xy pos) {
 		unit_t* target = select_get_unit_at(pos);
 		if (target && unit_hidden_by_fog(target)) target = nullptr;   // can't target through fog
+		// A unit target gets only the target flash; the ground circle is for ground orders
+		// (matches the right-click path — both at once looked wrong on attack clicks).
 		if (target && pending_targ != T_PATROL) flash_target(target);
-		show_marker(pos);
+		else show_marker(pos);
 		sync_selection();
 		bool q = key_shift();
 		switch (pending_targ) {

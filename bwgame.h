@@ -21916,13 +21916,19 @@ struct game_load_functions : state_functions {
 				st.total_minerals_gathered[i] = setup_info.starting_minerals;
 			}
 		}
-		for (size_t i = 0; i != 12; ++i) {
-			if (st.players[i].controller != player_t::controller_occupied) continue;
-			if (st.players[i].force >= 1 && st.players[i].force <= 4) {
-				if (game_st.forces[st.players[i].force - 1].flags & 8) {
-					for (size_t i2 = 0; i2 != 12; ++i2) {
-						if (st.players[i2].controller != player_t::controller_occupied) continue;
-						if (st.players[i2].force == st.players[i].force) st.shared_vision[i] |= 1 << i2;
+		// Force-based shared vision (FORC flag 8) applies only in Use Map Settings —
+		// melee ignores the map's force configuration, as in the original game. Applying
+		// it unconditionally leaked vision between randomly co-forced melee players (and
+		// even a later reset couldn't undo the tiles explored during initial processing).
+		if (use_map_settings) {
+			for (size_t i = 0; i != 12; ++i) {
+				if (st.players[i].controller != player_t::controller_occupied) continue;
+				if (st.players[i].force >= 1 && st.players[i].force <= 4) {
+					if (game_st.forces[st.players[i].force - 1].flags & 8) {
+						for (size_t i2 = 0; i2 != 12; ++i2) {
+							if (st.players[i2].controller != player_t::controller_occupied) continue;
+							if (st.players[i2].force == st.players[i].force) st.shared_vision[i] |= 1 << i2;
+						}
 					}
 				}
 			}
