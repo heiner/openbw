@@ -270,7 +270,7 @@ function wireInput(canvas, x) {
   const locked = () => document.pointerLockElement === canvas;
   wireInput.lockWanted = false;   // set by the settings wiring in boot()
   canvas.addEventListener('click', () => {
-    if (wireInput.lockWanted && !locked()) canvas.requestPointerLock();
+    if ((wireInput.lockWanted || document.fullscreenElement) && !locked()) canvas.requestPointerLock();
   });
 
   // Reflect a mouse event's modifier flags into the engine's key-state, which is
@@ -725,6 +725,10 @@ async function boot(session) {
   document.addEventListener('fullscreenchange', () => {
     if (document.fullscreenElement) {
       if (navigator.keyboard && navigator.keyboard.lock) navigator.keyboard.lock(['Escape']).catch(() => {});
+      // Capture the mouse too: without pointer lock, macOS reveals the menu bar when
+      // the cursor touches the screen top. If the activation expired, the next click
+      // engages it (the canvas click handler treats fullscreen as lock-wanted).
+      try { canvas.requestPointerLock(); } catch {}
     } else if (navigator.keyboard && navigator.keyboard.unlock) {
       navigator.keyboard.unlock();
     }
