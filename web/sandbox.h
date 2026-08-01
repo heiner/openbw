@@ -60,6 +60,10 @@ void setup_melee_slots(state& st, load_data_file_F&& load_data_file, const mp_sl
 			game_load.setup_info.create_melee_units_for_player[i] = true;
 		}
 	});
+	// Melee ignores the map's force settings, but the engine applies a force's "shared
+	// vision" flag (FORC flag 8) unconditionally — so two players randomly assigned to
+	// the same map force started the game seeing each other's vision. Reset to identity.
+	for (size_t i = 0; i != 12; ++i) st.shared_vision[i] = 1u << i;
 }
 
 template<typename load_data_file_F>
@@ -1574,8 +1578,35 @@ struct play_ui : ui_functions {
 	// Read-only state dump of the primary selected unit, for debugging from the JS console
 	// (window.__bw.x.openbw_debug_dump). One `key=value` per line.
 	a_string debug_text;
+	// Trap for the intermittent "I can see the bot's vision" report: shared vision,
+	// alliances, and cheats are all plain command-stream actions (opcodes 13/14/18) —
+	// record any occurrence with its owner so debug_dump can name the culprit.
+	int susp_action = 0, susp_owner = -1, susp_count = 0;
+	void on_action(int owner, int action) override {
+		ui_functions::on_action(owner, action);
+		if (action == 13 || action == 14 || action == 18) {
+			susp_action = action; susp_owner = owner; ++susp_count;
+		}
+	}
+
+	// Nonzero when the vision state is abnormal for a normal (non-spectator) game:
+	// bit 1 = fog disabled, bit 2 = shared vision not identity, bit 4 = a vision/
+	// alliance/cheat action was seen. Polled by the JS heartbeat as a tripwire.
+	int vision_anomaly() {
+		int a = 0;
+		if (fog_player < 0 && !spectator) a |= 1;
+		for (int i = 0; i != 8; ++i)
+			if (st.players[i].controller == player_t::controller_occupied &&
+			    st.shared_vision[i] != (uint32_t)(1u << i)) a |= 2;
+		if (susp_count) a |= 4;
+		return a;
+	}
+
 	const char* debug_dump() {
 		debug_text.clear();
+		debug_text += format("fog_player=%d shared_vision=[%x,%x,%x,%x] susp=%d(op%d by %d)\n",
+			fog_player, st.shared_vision[0], st.shared_vision[1], st.shared_vision[2], st.shared_vision[3],
+			susp_count, susp_action, susp_owner);
 		debug_text += format("selection=%d\n", (int)current_selection.size());
 		{   // the sim-side selection (what single-unit actions like build key off)
 			int n = 0; const char* first = "none";

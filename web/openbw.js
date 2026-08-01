@@ -931,6 +931,11 @@ async function boot(session) {
   // the loser goes `over`, stops sending turns, and the winner stalls on "Waiting for
   // opponent" a few frames short of detecting the win.
   const OVER_GRACE_MS = 5000;
+  const readCStringAt = (ptr) => {
+    const mem = new Uint8Array(memory.buffer);
+    let end = ptr; while (mem[end]) end++;
+    return new TextDecoder().decode(mem.subarray(ptr, end));
+  };
   let stepTimer, stepClock = performance.now(), lastProgress = performance.now(), overSince = 0;
   let lastHb = 0;   // heartbeat pacing (see the black-box recorder)
   const stepLoop = () => {
@@ -944,7 +949,19 @@ async function boot(session) {
       // stamp, the spin is inside the engine step; 'run:frame=N' means we returned.
       if (now - lastHb > 1000) { hb('run:pre-tick frame=' + lockstep.frame); }
       while (budget-- > 0 && performance.now() - now < MAX_BURST_MS && lockstep.tick()) advanced++;
-      if (now - lastHb > 1000) { hb('run:frame=' + lockstep.frame); lastHb = now; }
+      if (now - lastHb > 1000) {
+        hb('run:frame=' + lockstep.frame);
+        lastHb = now;
+        // Vision tripwire: an intermittent report of seeing the opponent's vision in a
+        // normal game — if the sim's vision state ever goes abnormal, name it loudly and
+        // persist the evidence (survives a closed tab).
+        const va = x.openbw_vision_anomaly ? x.openbw_vision_anomaly() : 0;
+        if (va) {
+          const dump = readCStringAt(x.openbw_debug_dump());
+          console.warn('[vision] anomaly ' + va + ': ' + dump.split('\n')[0]);
+          try { localStorage.setItem('openbw-vision', 'anomaly ' + va + ' frame=' + lockstep.frame + ' ' + dump.split('\n')[0]); } catch {}
+        }
+      }
       burstMs = performance.now() - now;
       stepClock += advanced * stepMs;      // only consume the time we actually simulated
       const stepped = advanced > 0;

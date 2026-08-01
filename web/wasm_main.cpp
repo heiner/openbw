@@ -235,6 +235,9 @@ OPENBW_EXPORT(openbw_messages) const char* openbw_messages() { return g_ui ? g_u
 // Read-only debug dump of the primary selected unit (window.__bw.x.openbw_debug_dump).
 OPENBW_EXPORT(openbw_debug_dump) const char* openbw_debug_dump() { return g_ui ? g_ui->debug_dump() : ""; }
 
+// Vision tripwire: nonzero = abnormal fog/shared-vision/cheat state (see sandbox.h).
+OPENBW_EXPORT(openbw_vision_anomaly) int openbw_vision_anomaly() { return g_ui ? g_ui->vision_anomaly() : 0; }
+
 // Selection wireframes: one line per selected unit; per-unit RGBA in a wire_box() square
 // (64 for a single selection's big console wireframe, 32 for group tiles).
 OPENBW_EXPORT(openbw_wires) const char* openbw_wires() { return g_ui ? g_ui->wires() : ""; }
