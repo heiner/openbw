@@ -2346,11 +2346,10 @@ struct play_ui : ui_functions {
 		}
 		if (g->frames.empty()) return;
 		auto& frame = g->frames[(size_t)(ui_now / 100) % g->frames.size()];
-		// Hotspot: the arrow points with its tip (GRP box top-left); everything else
-		// (circles, crosshairs, scroll arrows) is centred on the mouse.
-		bool tip = g == &cur.arrow;
-		int sx = mouse_x - (tip ? 0 : (int)g->width / 2) + (int)frame.offset.x;
-		int sy = mouse_y - (tip ? 0 : (int)g->height / 2) + (int)frame.offset.y;
+		// Hotspot = the GRP box centre for every cursor: the art is authored inside a
+		// 128x128 box so the hotspot (the arrow's tip, a circle's centre) lands there.
+		int sx = mouse_x - (int)g->width / 2 + (int)frame.offset.x;
+		int sy = mouse_y - (int)g->height / 2 + (int)frame.offset.y;
 		if (sx >= (int)screen_width || sy >= (int)screen_height) return;
 		size_t w = frame.size.x, h = frame.size.y;
 		if (sx + (int)w <= 0 || sy + (int)h <= 0) return;
