@@ -1956,8 +1956,24 @@ struct play_ui : ui_functions {
 		int steps; bool shield;
 		wire_state(u, steps, shield);
 		int rnd = u->wireframe_randomizer & 3;
-		// OG tri-color part states: 0 green, 1 yellow, 2 red.
+		// Overall damage class for whole-frame tinting: green / yellow / red by HP thirds.
+		int cls = steps == 0 ? 0 : steps <= 5 ? 1 : 2;   // healthy / hurt / critical (~thirds)
+		// OG tri-color part states (208-211 frames): 0 green, 1 yellow, 2 red.
 		static const uint8_t PART[3][3] = { {44,228,52}, {232,208,16}, {216,24,24} };
+		// Zerg frames (216-219) are a 4-shade concentric gradient of ONE organism (216 =
+		// core, 219 = body/outline). In the original a HEALTHY drone is mostly red with a
+		// green core, and a dying one is dark blue with a magenta core — damage slides the
+		// 4-index window along a green→red→purple→blue cycle.
+		static const uint8_t ZGRAD[8][3] = {
+			{64,240,64},    // bright green core
+			{150,220,40},   // green-yellow
+			{232,140,20},   // orange
+			{228,50,24},    // bright red
+			{200,70,170},   // magenta
+			{110,60,190},   // purple
+			{50,50,160},    // blue
+			{28,28,100},    // dark blue
+		};
 		wire_rgba.assign(box * box * 4, 0);
 		for (size_t p = 0; p != box * box; ++p) {
 			uint8_t c = wire_index[p];
@@ -1970,10 +1986,14 @@ struct play_ui : ui_functions {
 				if (!shield) continue;
 				if (c == 192) { o[0] = 72; o[1] = 136; o[2] = 255; }
 				else          { o[0] = 48; o[1] = 92;  o[2] = 190; }
+			} else if (c >= 216 && c <= 219) {
+				int gi = (c - 216) + 2 * cls;   // damage slides the window along the cycle
+				if (gi > 7) gi = 7;
+				o[0] = ZGRAD[gi][0]; o[1] = ZGRAD[gi][1]; o[2] = ZGRAD[gi][2];
 			} else {
-				// The unit line art: damage-tracked parts (208-211 / 216-219), low 2 bits pick
-				// the part. Its rank in the degradation order is randomizer-seeded; `steps`
-				// deals one step per part round-robin, so each part is green, yellow, or red.
+				// Mechanical line art: damage-tracked parts (208-211), low 2 bits pick the
+				// part. Its rank in the degradation order is randomizer-seeded; `steps` deals
+				// one step per part round-robin, so each part is green, yellow, or red.
 				int rank = ((int)(c & 3) + rnd) % 4;
 				int st = steps / 4 + (rank < steps % 4 ? 1 : 0);
 				if (st > 2) st = 2;
