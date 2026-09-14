@@ -830,6 +830,11 @@ struct play_ui : ui_functions {
 		case U::Zerg_Nydus_Canal:         out[0] = U::Zerg_Hive; break;
 		case U::Zerg_Ultralisk_Cavern:    out[0] = U::Zerg_Hive; break;
 		case U::Zerg_Defiler_Mound:       out[0] = U::Zerg_Hive; break;
+		case U::Zerg_Lair:                out[0] = U::Zerg_Spawning_Pool; break;
+		case U::Zerg_Hive:                out[0] = U::Zerg_Queens_Nest; break;
+		case U::Zerg_Greater_Spire:       out[0] = U::Zerg_Hive; break;
+		case U::Zerg_Sunken_Colony:       out[0] = U::Zerg_Spawning_Pool; break;
+		case U::Zerg_Spore_Colony:        out[0] = U::Zerg_Evolution_Chamber; break;
 		case U::Protoss_Gateway:          out[0] = U::Protoss_Nexus; break;
 		case U::Protoss_Forge:            out[0] = U::Protoss_Nexus; break;
 		case U::Protoss_Cybernetics_Core: out[0] = U::Protoss_Gateway; break;
@@ -868,6 +873,19 @@ struct play_ui : ui_functions {
 		using U = UnitTypes;
 		return id == U::Zerg_Lair || id == U::Zerg_Hive || id == U::Zerg_Greater_Spire ||
 		       id == U::Zerg_Sunken_Colony || id == U::Zerg_Spore_Colony;
+	}
+
+	// The building a Zerg building morph is performed on (BWAPI whatBuilds); None if the
+	// type isn't a building morph.
+	static UnitTypes bw_morphs_from(UnitTypes id) {
+		using U = UnitTypes;
+		switch (id) {
+		case U::Zerg_Lair:          return U::Zerg_Hatchery;
+		case U::Zerg_Hive:          return U::Zerg_Lair;
+		case U::Zerg_Greater_Spire: return U::Zerg_Spire;
+		case U::Zerg_Sunken_Colony: case U::Zerg_Spore_Colony: return U::Zerg_Creep_Colony;
+		default: return U::None;
+		}
 	}
 
 	// The building an addon attaches to (BWAPI whatBuilds); None if not an addon.
@@ -1018,8 +1036,10 @@ struct play_ui : ui_functions {
 			const unit_type_t* t = get_unit_type(id);
 			bool tb = ut_building(t), addon = ut_addon(t);
 			// Producer cards list units plus their addons (addons are buildings, but the
-			// producer builds them, not a worker); the worker submenu lists real buildings.
-			if (buildings_only ? (!tb || addon) : (tb && !addon)) continue;
+			// producer builds them, not a worker) and the building morphs performed on this
+			// building (Hatchery -> Lair etc); the worker submenu lists real buildings.
+			bool morph = building && bw_morphs_from(id) == u->unit_type->id;
+			if (buildings_only ? (!tb || addon) : (tb && !addon && !morph)) continue;
 			if (cat && tb && bw_build_advanced(id) != (cat == 2)) continue;
 			bool can = unit_can_build(u, t);
 			UnitTypes req = UnitTypes::None;
@@ -1030,7 +1050,8 @@ struct play_ui : ui_functions {
 				// bw_build_key is non-zero only for real build-menu buildings.
 				bool always = (buildings_only && bw_build_key(id) && unit_race(t) == race && !bw_is_building_morph(id))
 				           || (!buildings_only && addon && bw_addon_parent(id) == u->unit_type->id)
-				           || (!buildings_only && !tb && bw_what_builds(id) == u->unit_type->id);
+				           || (!buildings_only && !tb && bw_what_builds(id) == u->unit_type->id)
+				           || (!buildings_only && morph);
 				if (!always) continue;
 				req = first_missing_req(id, u->owner);
 			}
@@ -1102,8 +1123,10 @@ struct play_ui : ui_functions {
 			} else card.push_back({pick_key("Land"), "Land", C_LAND, U::None});
 		}
 		if (building && u_grounded_building(u)) {
-			bool produces = false;
-			for (auto& c : card) if (c.act == C_TRAIN || c.act == C_MORPHBLDG) { produces = true; break; }
+			// Real trainers rally, and so does the Zerg town hall (its morphs are C_MORPHBLDG
+			// but larvae still rally); a Creep Colony or Spire only morphs and doesn't.
+			bool produces = id == U::Zerg_Hatchery || id == U::Zerg_Lair || id == U::Zerg_Hive;
+			for (auto& c : card) if (c.act == C_TRAIN) { produces = true; break; }
 			if (produces) card.push_back({pick_key("Rally"), "Set Rally Point", C_RALLY, U::None});
 			if (id == U::Zerg_Hatchery || id == U::Zerg_Lair || id == U::Zerg_Hive)
 				// Key off a prefix of the label, so the letter the host highlights is the
